@@ -1,2 +1,14 @@
 # glider-connectivity-model
-Optimising connectivity solutions for arboreal gliding mammal
+
+## About
+
+This set of `rmd` files were used for the analysis of connectivity of Sunda colugo in:
+> journal article
+
+## Model
+
+## Data
+
+## Citation
+
+## Contact
