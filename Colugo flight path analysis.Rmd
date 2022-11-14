@@ -1,0 +1,992 @@
+---
+title: "Colugo flight path analysis"
+author: "Rachel Lee S.K. "
+date created: "06/03/2021"
+date updated: "13/11/2022"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+# Setup packages and working directories
+
+```{r Load libraries and setup WD, include = F}
+library(tidyverse)
+library(raster)
+library(rgdal)
+library(units)
+library(sf)
+library(ggplot2)
+library(tmap)
+
+setwd("~/Documents/Manuscripts/Colugo MS")
+
+```
+
+# Flight path generation (2016)
+
+Flight path generation between each pairs of tree (before hoarding i.e. 2016)
+
+```{r Join attributes by location & line generation, include = F}
+
+#variable control panel
+path_trees2016 <- "./Working layers/Trees_50mMLR_2016_P5P6MLR.shp"
+
+#load & inspect data
+trees16_sf <- st_read(path_trees2016)
+head(trees16_sf)
+unique(trees16_sf$MLRLoc)
+unique(trees16_sf$Species)
+
+#exclude plants that are unsuitable for gliding mammal usage e.g., shrubs or spiny palms
+genus_exclude <- 'Elaeis|Oncosperma|Strychnos|Ziziphus|Clerodendrum|Dillenia|Calliandra' 
+
+
+#data transformation
+trees16_sf2<- trees16_sf %>%
+  mutate(Geom = trees16_sf$geometry) %>%
+  mutate_at("MLRLoc", as.character) %>% 
+  filter(! grepl(genus_exclude, Species)) %>% ##remove unsuitable genus
+  filter(! Height_M < 1) #remove short individuals
+
+#generate unique buffer based on estimated glide distance
+trees16_buffer <- st_buffer(trees16_sf2, trees16_sf2$GlideRadii)
+
+#join attributes by location
+#join ToTrees and FrmTrees within glide radii
+#remove those from same sides (e.g. North to North)
+#remove those from South to S - Behind NS Fence South
+joined_trees16 <- st_join(trees16_sf2, trees16_buffer, 
+                          suffix = c(".To", ".Frm"), left = FALSE) %>% ##To before frm
+                  filter(! MLRLoc.Frm == MLRLoc.To) %>% 
+                  filter(! grepl("S", MLRLoc.Frm) == grepl("S", MLRLoc.To))
+
+#line generation
+flightlines <- st_sfc(mapply(function(a,b){st_cast(st_union(a,b),"LINESTRING")},
+                                        joined_trees16$Geom.Frm, joined_trees16$Geom.To,
+                                        SIMPLIFY=FALSE),
+                      crs=3414)
+head(flightlines) #does not contain attributes
+
+#random check to ensure that order remained the same
+flightlines[211,]
+joined_trees16[211, c(24,25)]
+
+#Updating geometries of joined_trees16 from multipoint to multiline
+#allows the retention of attributes
+flight16 <- joined_trees16 %>%
+  st_set_geometry(flightlines) %>%
+  dplyr::select(-c(Lat.Frm, Long.Frm, Height_GR.Frm, Geom.Frm,
+                   Lat.To, Long.To, Height_GR.To, Geom.To))
+
+#check crs
+st_crs(flightlines)
+
+```
+
+####Set landing height (2016)
+
+By default, landing height of Colugo is set to 1.5m above ground. However, if there is a hump (rise in elevation) along the flight path, the Colugo might risk hitting the hump if it were "forced" to land at 1.5m for the landing tree. Hence, the landing height has to be adjusted in such scenarios.
+
+1. Determine the max elevation value along the flight path from the raster digital elevation model
+2. Find difference between maxElev and Elev.To; colname: `diffElev_Max`
+3. If diffElev_Max > 1.5, set the landing height (`LandHeight`) as the difference. If not, landing height remains as 1.5m
+
+```{r Extract data from raster, include = F}
+
+#variable control panel
+path_dem2016 <- "./Working layers/DEM_2016.tif"
+path_MLRbuffer <- "./Working layers/P5P6_FutureMLR_50mBuffer.shp"
+
+#load data
+dem16<- raster(path_dem2016) %>%
+  projectRaster(crs=crs(flight16))
+  
+mlr_buffer <- st_read(path_MLRbuffer)
+
+#crop raster to extent to reduce analysis time
+dem16_Crop <- crop(x = dem16, y = mlr_buffer)
+
+#### Measure raster values ####
+#extract max raster value along each flight path
+flightSamp <- flight16 %>%
+  mutate(maxElev = raster::extract(x = dem16_Crop, y = .,
+                                   fun = max, progress = 'text'))
+
+#### Set landing height for F1 ####
+flight16_dem2  <- flightSamp %>%
+  mutate(diffElev_Max = maxElev-Elev.To) %>%
+  mutate(LandHeight = ifelse(diffElev_Max>1.5, diffElev_Max, 1.5))
+
+#### Save out shapefile ####
+st_write(flight16_dem2, "./Results/Flight paths/FlightPaths_2016_WElev.shp", crs=3414)
+
+```
+
+####Clear tree height, no hoard
+
+1. Check that land tree is tall enough for Colugo to land: `0.8*Height_M.Frm > LandHeight`
+2. Measure minimum take-off height (H) which is what's required for the Colugo to travel along each flight path and reach respectiveLandHeight: `H = v + LandHeight + (Elev.To - Elev.Frm)`
+3. Check if the departure tree is tall enough for the Colugo to land at the paired landing tree: `0.8*Height_M.Frm >  H`
+4. Find highest point where Colugo can depart for each flight path: `MaxDepart = v + 0.8*Height_M.To + (Elev.To - Elev.Frm)`
+
+
+```{r Removing invalid flight paths, include = F}
+
+#variable control panel
+path_flight16 <- "./Results/Flight paths/FlightPaths_2016_WElev.shp"
+
+#load & inspect data
+flight16 <- st_read(path_flight16)
+colnames(flight16)
+
+#st_write process changed the col names
+# shapefile attributes rename
+flight16 <- flight16 %>%
+  rename(Height_M.Frm = Hgh_M_F) %>%
+  rename(Height_M.To = Hgh_M_T) %>%
+  rename(LandHeight = LndHght) %>%
+  rename(Elev.To = Elev_To) %>%
+  rename(Elev.Frm = Elv_Frm)  
+
+#### Calculate H ####
+flight16 <- flight16 %>%
+  #measure horizontal glide distance
+  mutate(Dist = drop_units(st_length(flight16))) %>%
+  #determine change in vertical height through colugo glide ratio model
+  mutate(v = Dist/(0.8781*log(Dist) + 0.046)) %>%
+  #determine minimum departure height with consideration of elevation
+  mutate(H = v + LandHeight + (Elev.To - Elev.Frm)) %>%
+  #set upper bound for departure height
+  mutate(MaxDepart = v + 0.8*Height_M.To + (Elev.To - Elev.Frm)) %>% 
+  mutate(Depart = ifelse((MaxDepart<0.8*Height_M.Frm), MaxDepart, 0.8*Height_M.Frm)) %>%
+  #find DiffHij, which is used to check path feasibility and used as path quality
+  mutate(Diff_H = Depart-H ) %>%
+  #check also that landing tree is tall enough to support colugo landing
+  mutate(Diff_M = 0.8*Height_M.To - LandHeight)
+
+#check again that unsuitable genus is not present
+flight16_plantrem <- flight16 %>%
+  filter(! grepl(genus_exclude, Specs_T)) %>%
+  filter(! grepl(genus_exclude, Spcs_Fr))
+
+st_write(flight16_plantrem, "./Results/Flight paths/FlightPaths_2016_with Height.shp", crs=3414)
+
+#### Remove invalid flight paths ####
+flight16_valid <- flight16_plantrem %>% 
+  filter(! Diff_H < 0) %>%
+  filter(! Diff_M < 0)
+
+st_write(flight16_valid, "./Results/Flight paths/FlightPaths_2016_Valid.shp", crs=3414)
+
+#examines differences in connectivity with and without Alstonia (planted roadside trees)
+flight16_noAlstonia <- flight16_valid %>%
+  filter(! grepl("Alstonia", Specs_T)) %>%
+  filter(! grepl("Alstonia", Spcs_Fr))
+flight16_onlyAlstonia <- flight16_valid %>%
+  filter(grepl("Alstonia", Specs_T) | grepl("Alstonia", Spcs_Fr))
+
+#plot to check  
+tm_shape(flight16_valid) +
+    tm_lines(col = 'gray', alpha = 0.4, lwd = 1.5, legend.show = FALSE) +
+tm_shape(flight16_onlyAlstonia) +
+    tm_lines(col = 'steelblue', alpha = 0.4, lwd = 1.5, legend.show = FALSE)
+
+```
+
+####Rasterize 2016 flight paths
+
+For visualization and to calculate percentage pixels covered by feasible glide paths
+
+```{r Rasterize, include = F}
+
+#if load from saved data
+path_flight16 <- "./Results/Flight paths/FlightPaths_2016_Valid.shp"
+path_MLRbuffer <- "./Working layers/P5P6_FutureMLR_50mBuffer.shp"
+flight16_valid <- st_read(path_flight16)
+mlr_buffer <- st_read(path_MLRbuffer)
+
+#if load from previous code
+#i.e., "flight16_valid"
+
+head(flight16_valid)
+
+#Dilation to allow for variance in the linearity of a colugo glide path 
+#as colugos have some manoeuvrability in mid-air and can glide around minor obstacles
+flight16_valid_buffer <- st_buffer(flight16_valid, 2, endCapStyle = 'FLAT')
+
+#separate into south to north
+#and north to south
+s2n_16 <- flight16_valid_buffer %>%
+  filter(MLRLc_T == "North")
+n2s_16 <- flight16_valid_buffer %>%
+  filter(MLRLc_T == "South")
+
+#rasterize each direction first
+raster_template = raster(extent(mlr_buffer), resolution = 0.5,
+                         crs = st_crs(mlr_buffer)$proj4string)
+
+flight16_raster_s2n = rasterize(s2n_16, raster_template, field = 'Diff_H', fun = 'count', progress = 'text')
+flight16_raster_n2s = rasterize(n2s_16, raster_template, field = 'Diff_H', fun = 'count', progress = 'text')
+
+#rasterize both direction
+flight16_raster_total = rasterize(flight16_valid_buffer, raster_template, field = 'Diff_H', fun = 'count', progress = 'text')
+
+#rasterize based on quality of flight
+flight16_raster_quality = rasterize(flight16_valid_buffer, raster_template, 
+                                    field = 'Diff_H', fun = 'sum', 
+                                    progress = 'text')
+
+#find min of values for overlapping cells (effective connectivity)
+rasterlist_16 <- list(flight16_raster_n2s,flight16_raster_s2n )
+stack16 <- stack(rasterlist_16)
+
+minConnectivity_16 <- min(stack16)
+
+#plot and see
+plot(flight16_raster_quality)
+plot(flight16_raster_total)
+plot(flight16_raster_s2n)
+plot(flight16_raster_n2s)
+
+plot(minConnectivity_16)
+
+#save out
+writeRaster(flight16_raster_total, "./Results/Flight paths/FlightPaths_2016_Valid_raster.tif", crs=3414)
+writeRaster(flight16_raster_s2n, "./Results/Flight paths/FlightPaths_2016_Valid_raster_s2n.tif", crs=3414)
+writeRaster(flight16_raster_n2s, "./Results/Flight paths/FlightPaths_2016_Valid_raster_n2s.tif", crs=3414)
+writeRaster(minConnectivity_16, "./Results/Flight paths/FlightPaths_2016_Valid_raster_effective connectivity.tif", crs=3414)
+
+```
+
+####2019
+####Preparation for hoarding
+
+<skip to chunk 6 after flight path generated>
+
+Files to be prepared in QGIS: 
+1. Clipped hoarding line shapefile that contains South/North information
+2. Hoarding polygon shapefile that contains South/North information
+
+Files to be prepared in R:
+1. Flight path from 2019 trees and poles
+
+```{r Join attributes by location & line generation, include = F}
+
+#variable control panel
+path_trees2019 <- "./Working layers/TreesPoles_Remain2019_P5P6MLR_20210604.shp"
+genus_exclude <- 'Elaeis|Oncosperma|Strychnos|Ziziphus|Clerodendrum|Dillenia|Calliandra'
+
+#load tree data
+trees19_sf <- st_read(path_trees2019)
+
+#data transformation
+trees19_sf2<- trees19_sf %>%
+  mutate(Geom = trees19_sf$geometry) %>%
+  mutate_at("MLR_Loc", as.character) %>%
+  filter(! grepl(genus_exclude, Species)) %>%
+  filter(! Height_M < 1)
+
+trees19_buffer <- st_buffer(trees19_sf2, trees19_sf2$GlideRadii)
+
+#join attributes by location
+#separate into poles and trees
+#for poles, allow for same side flight i.e. S to S and N to N
+#required to check multistep travel from S to Pole to N and vice versa
+joined_trees19 <- st_join(trees19_sf2, trees19_buffer, 
+                          suffix = c(".To", ".Frm"), left = FALSE) %>%
+                  filter(! MLR_Loc.Frm == MLR_Loc.To) %>% 
+                  filter(! grepl("S", MLR_Loc.Frm) == grepl("S", MLR_Loc.To))
+
+################for future scenario (no hoarding, no poles)#####################
+#recylcing of codes to be used
+#turn on the following chunk when generating this scenario.
+#the main difference is that...
+#poles removed from tree layer before joining attributes by location
+#trees22 <- trees19_sf2 %>%
+#  filter(Type == 'Tree')
+
+#trees22_buffer <- st_buffer(trees22, trees22$GlideRadii)
+
+#joined_trees19 <- st_join(trees22, trees22_buffer, 
+#                          suffix = c(".To", ".Frm"), left = FALSE) %>%
+#                  filter(! MLR_Loc.Frm == MLR_Loc.To)
+
+################for future scenario (no hoarding, no poles)#####################
+
+#line generation
+flightlines19 <- st_sfc(mapply(function(a,b){st_cast(st_union(a,b),"LINESTRING")},
+                                        joined_trees19$Geom.Frm, joined_trees19$Geom.To,
+                                        SIMPLIFY=FALSE),
+                      crs=3414)
+head(flightlines19) #does not contain attributes
+
+#random check to ensure that order remained the same
+flightlines19[211,]
+joined_trees19[211, c(24,25)]
+
+#### Flight path generation ####
+flight19 <- joined_trees19 %>%
+  st_set_geometry(flightlines19) %>%
+  dplyr::select(-c(Lat.Frm, Long.Frm, Height_GR.Frm, Geom.Frm,
+                   Lat.To, Long.To, Height_GR.To, Geom.To))
+
+flightcolumns <- colnames(flight19)
+
+#### Save shapefile ####
+st_write(flight19, "./Results/Flight paths/FlightPaths_2019_20220324.shp")
+#write.csv(flightcolumns, "./R/Flight_colnames_without Elev.csv")
+
+#For future with no hoarding and no poles
+#st_write(flight19, "./Results/Flight paths/FlightPaths_2022.shp")
+
+```
+
+####Set landing height (2019)
+
+By default, landing height of Colugo is set to 1.5m above ground. However, if there is a hump (rise in elevation) along the flight path, the Colugo might risk hitting the hump if it were "forced" to land at 1.5m for the landing tree. Hence, the landing height has to be adjusted in such scenarios.
+
+1. Determine the elevation value along the flight path from the raster digital elevation model
+2. Find difference between maxElev and Elev.To; colname: `diffElev_Max`
+3. If diffElev_Max > 1.5, set the landing height (`LandHeight`) as the difference. If not, landing height remains as 1.5m
+
+
+```{r Extract data from raster, include = F}
+
+#variable control panel
+path_dem2019 <- "./Working layers/DEM_2019.tif"
+path_MLRbuffer <- "./Working layers/P5P6_FutureMLR_50mBuffer.shp"
+
+#load data
+dem19 <- raster(path_dem2019)
+mlr_buffer <- st_read(path_MLRbuffer)
+
+#crop raster to extent
+dem19_Crop <- crop(x = dem19, y = mlr_buffer)
+
+#### Measure raster values ####
+flightSamp <- flight19 %>%
+  mutate(maxElev = raster::extract(x = dem19_Crop, y = flight19,
+                                   fun = max, progress = 'text'))
+
+#### Set landing height for F1 ####
+flightSamp <- flightSamp %>%
+  mutate(diffElev_Max = maxElev-Elev.To) %>%
+  mutate(LandHeight = ifelse(diffElev_Max>1.5, diffElev_Max, 1.5))
+
+#### Save out shapefile ####
+st_write(flightSamp, "./Results/Flight paths/FlightPaths_2019_WElev.shp", crs=3414)
+
+```
+
+#### Clear tree height WITHOUT hoarding and poles
+
+```{r Removing invalid flight paths for simulation, include = F}
+
+#### Calculate H ####
+flight22 <- flightSamp %>%
+  mutate(Dist = drop_units(st_length(flight19))) %>%
+  mutate(v = Dist/(0.8781*log(Dist) + 0.046)) %>%
+  mutate(H = v + LandHeight + (Elev.To - Elev.Frm)) %>%
+  mutate(MaxDepart = v + 0.8*Height_M.To + (Elev.To - Elev.Frm)) %>% 
+  mutate(Depart = ifelse((MaxDepart<0.8*Height_M.Frm), MaxDepart, 0.8*Height_M.Frm)) %>%
+  mutate(Diff_H = Depart-H ) %>%
+  mutate(Diff_M = 0.8*Height_M.To - LandHeight)
+
+#### Remove invalid flight paths ####
+flight22_valid <- flight22 %>% 
+  filter(! Diff_H < 0) %>%
+  filter(! Diff_M < 0)
+
+st_write(flight22_valid, "./Results/Flight paths/FlightPaths_2022_Valid.shp", crs=3414)
+
+#plot to check
+tm_shape(flight22_valid) +
+  tm_lines(col = 'blue', alpha = 1, lwd = 1.5, legend.show = FALSE)
+
+```
+
+
+#### Clipping flight paths with hoarding
+
+The consideration of hoarding as obstacles has to be unidirectional i.e. North to South and South to North to be considered separetly.
+
+Need to generate 3 sets of flight path where:
+1. *F1*: ends at landing tree
+2. *F2*: ends at 0.5m above hoarding at landing side
+3. *F3*: ends at hoarding at departure side
+2. *F4*: ends at 1.0m above hoarding at landing side
+
+```{r Join attributes by location & difference, include = F}
+
+#variable control panel
+path_flight19 <- "./Results/Flight paths/FlightPaths_2019_WElev.shp"
+path_colnames <- "./R/Flight_colnames_without Elev.csv"
+
+path_hoardLines <- "./Working layers/P5P6_Hoard_WElev_Jan2019.shp"
+path_hoardPoly <- "./Working layers/Hoard_WElev_Jan2019_Poly.shp"
+
+#load data
+hoard <- st_read(path_hoardLines)
+hoardPoly <- st_read(path_hoardPoly)
+
+#if continuing from previous code chunk
+#flight19 <- flightSamp
+
+#if starting with new r environment
+flight19 <- st_read(path_flight19)
+flightcolumns <- read.csv(path_colnames)
+
+#### update flight19 column names that were changed during st_write ####
+colnames(flight19)
+
+flightcolumns2 <- flightcolumns[1:16,] %>%
+  dplyr::select(x) %>%
+  add_row(x=c("maxElev", "diffElev_Max", "LandHeight", "geometry"))
+
+flight19 <- rename_with(flight19, function(x) flightcolumns2$x)
+
+#### start ####
+#separate North South
+F1_n2s <- flight19 %>%
+  filter(MLR_Loc.Frm == 'North')
+
+F1_s2n <- flight19 %>%
+  filter(! MLR_Loc.Frm == 'North')
+
+# variable control panel (for sides)
+#run one at a time (n2s or s2n)
+#### north to south ####
+flight19_run <- F1_n2s
+F2side_exclude <- 'North'
+F3side_exclude <- 'South'
+
+#add elevation data where hoard intersect flight
+joined_F2 <- st_join(flight19_run, hoard,
+                             left = FALSE) %>%
+                     mutate_at("Side", as.character) %>%
+                     filter(! grepl(F2side_exclude, Side))
+joined_F3 <- st_join(flight19_run, hoard,
+                             left = FALSE) %>%
+                     mutate_at("Side", as.character) %>%
+                     filter(! grepl(F3side_exclude, Side))
+
+#clip away section beyond hoarding
+F2_n2s <- st_difference(joined_F2, 
+                        hoardPoly[which(hoardPoly$Side == F3side_exclude),]) %>%
+  mutate(LandHeight1 = 2.9) %>%
+  mutate(LandHeight2 = 3.4)
+F3_n2s <- st_intersection(joined_F3, 
+                  hoardPoly[which(hoardPoly$Side == F2side_exclude),]) %>%
+  mutate(LandHeight = 2.9)
+
+#plot to check
+tm_shape(hoard) +
+    tm_lines(col = 'black') +
+tm_shape(F1_n2s) +
+    tm_lines(col = 'gray', lwd = 1.5, legend.show = FALSE) +
+tm_shape(F2_n2s) +
+    tm_lines(col = 'steelblue', lwd = 1.5, legend.show = FALSE) +
+tm_shape(F3_n2s) +
+    tm_lines(col = 'indianred')
+
+#variable control panel (for sides)
+#run one at a time (n2s or s2n)
+#### south to north ####
+flight19_run <- F1_s2n
+F2side_exclude <- 'South'
+F3side_exclude <- 'North'
+
+#add elevation data where hoard intersect flight
+joined_F2 <- st_join(flight19_run, hoard,
+                             left = FALSE) %>%
+                     mutate_at("Side", as.character) %>%
+                     filter(! grepl(F2side_exclude, Side))
+joined_F3 <- st_join(flight19_run, hoard,
+                             left = FALSE) %>%
+                     mutate_at("Side", as.character) %>%
+                     filter(! grepl(F3side_exclude, Side))
+
+#clip away section beyond hoarding
+F2_s2n <- st_difference(joined_F2, 
+                        hoardPoly[which(hoardPoly$Side == F3side_exclude),]) %>%
+  mutate(LandHeight1 = 2.9) %>%
+  mutate(LandHeight2 = 3.4)
+F3_s2n <- st_intersection(joined_F3, 
+                  hoardPoly[which(hoardPoly$Side == F2side_exclude),]) %>%
+  mutate(LandHeight = 2.9)
+
+#plot to check
+tm_shape(hoard) +
+    tm_lines(col = 'black') +
+tm_shape(F1_s2n) +
+    tm_lines(col = 'gray', lwd = 1.5, legend.show = FALSE) +
+tm_shape(F2_s2n) +
+    tm_lines(col = 'steelblue', lwd = 1.5, legend.show = FALSE) +
+tm_shape(F3_s2n) +
+    tm_lines(col = 'indianred')
+
+```
+
+####Clear tree height, with hoarding
+
+1. Check that land tree is tall enough for Colugo to land: `0.8*Height_M.Frm > LandHeight`
+2. Measure minimum take-off height (H) which is what's required for the Colugo to travel along each flight path and reach respectiveLandHeight: `H = v + LandHeight + (Elev.To - Elev.Frm)`
+3. Find maximum H value *maxH*
+4. Check if the departure tree is tall enough for the Colugo to land at the paired landing tree: `0.8*Height_M.Frm >  maxH`
+4. Find highest point where Colugo can depart for each flight path: `MaxDepart = v + 0.8*Height_M.To + (Elev.To - Elev.Frm)`
+
+
+```{r Removing invalid flight paths, include = F}
+
+#### variable control panel (for sides) #### 
+#run one at a time (n2s or s2n)
+#north to south
+F1_run <- F1_n2s
+F2_run <- F2_n2s
+F3_run <- F3_n2s
+
+#south to north
+F1_run <- F1_s2n
+F2_run <- F2_s2n
+F3_run <- F3_s2n
+
+#### Calculate H ####
+#run one at a time (n2s or s2n)
+#to calculate for each flight resulting in
+#H1, H2, H3, H4
+#find maxH2 between H1, H2 and H3
+#find maxH4 between H1, H4 and H3
+  
+F2_df <- F2_run %>%
+  mutate(Dist = drop_units(st_length(F2_run))) %>%
+  mutate(v2 = Dist/(0.8781*log(Dist) + 0.046)) %>%
+  mutate(H2 = v2 + LandHeight1 + (Elevation - Elev.Frm)) %>% #rmb to set To Elevation to the elevation of hoarding
+  mutate(H4 = v2 + LandHeight2 + (Elevation - Elev.Frm)) %>% #rmb to set To Elevation to the elevation of hoarding
+  st_drop_geometry() %>%
+  dplyr::select(c("ID.To", "ID.Frm", "H2", "H4"))
+
+#duplicated <- F2_df[duplicated(F2_df[,c(1,9)]),]
+  
+F3_df <- F3_run %>%
+  mutate(Dist = drop_units(st_length(F3_run))) %>%
+  mutate(v3 = Dist/(0.8781*log(Dist) + 0.046)) %>%
+  mutate(H3 = v3 + LandHeight + (Elevation - Elev.Frm)) %>% #rmb to set To Elevation to the elevation of hoarding
+  st_drop_geometry() %>%
+  dplyr::select(c("ID.To", "ID.Frm", "H3"))
+  
+master <- F1_run %>%
+  mutate(Dist = drop_units(st_length(F1_run))) %>%
+  mutate(v = Dist/(0.8781*log(Dist) + 0.046)) %>%
+  mutate(H1 = v + LandHeight + (Elev.To - Elev.Frm)) %>%
+  left_join(F2_df, by = c("ID.To", "ID.Frm"), keep = F) %>%
+  left_join(F3_df, by = c("ID.To", "ID.Frm"), keep = F) %>%
+  rowwise() %>%
+  mutate(maxH2 = max(H1, H2, H3, na.rm = T)) %>%
+  mutate(maxH4 = max(H1, H4, H3, na.rm = T)) %>%
+  mutate(M2 = H2 - v + (Elev.Frm - Elev.To)) %>%
+  mutate(M4 = H4 - v + (Elev.Frm - Elev.To)) %>%
+  #If pole, we are looking at 100% of height instead of 80%
+  mutate(MaxDepart = ifelse(Type.To == "Pole",
+                            v + Height_M.To + (Elev.To - Elev.Frm), #rule for pole
+                            v + 0.8*Height_M.To + (Elev.To - Elev.Frm))) %>% #rule for tree
+  mutate(Depart = ifelse(Type.Frm == "Pole",
+                                     ifelse((MaxDepart<Height_M.Frm), MaxDepart, Height_M.Frm), #rule for pole
+                         ifelse((MaxDepart<0.8*Height_M.Frm), MaxDepart, 0.8*Height_M.Frm))) %>% #rule for tree
+  mutate(Diff_maxH2 = Depart-maxH2) %>%
+  mutate(Diff_maxH4 = Depart-maxH4) %>%
+  mutate(Diff_M2 = ifelse(Type.To == "Pole",
+                            Height_M.Frm - M2, #rule for pole
+                            0.8*Height_M.Frm - M2)) %>%
+  mutate(Diff_M4 = ifelse(Type.To == "Pole",
+                            Height_M.Frm - M4,
+                            0.8*Height_M.Frm - M4))
+
+#### Save out
+#run one at a time (n2s or s2n)
+master_n2s <- master #after running n2s
+master_s2n <- master #after running s2n
+
+#bidirectional
+master_bi <- rbind(master_n2s, master_s2n)
+
+#for poles only
+#master_poles <- rbind(master_n2s, master_s2n)
+
+#before invalide flight paths were removed
+st_write(master_bi, "./Results/Flight paths/FlightPaths_2019_with Height_20220328.shp", crs=3414)
+
+#### Remove invalid flight paths ####
+#north to south
+flight19_valid_n2s_H2 <- master_n2s %>%
+  filter(! Diff_maxH2 < 0) %>%
+  filter(! Diff_M2 < 0) %>%
+  mutate(Type = ifelse(Type.To == "Pole", "Pole", 
+                       ifelse(Type.Frm == "Pole", "Pole", "Tree")))
+
+flight19_valid_n2s_H4 <- master_n2s %>%
+  filter(! Diff_maxH4 < 0) %>%
+  filter(! Diff_M4 < 0) %>%
+  mutate(Type = ifelse(Type.To == "Pole", "Pole", 
+                       ifelse(Type.Frm == "Pole", "Pole", "Tree")))
+
+#south to north
+flight19_valid_s2n_H2 <- master_s2n %>%
+  filter(! Diff_maxH2 < 0) %>%
+  filter(! Diff_M2 < 0) %>%
+  mutate(Type = ifelse(Type.To == "Pole", "Pole", 
+                       ifelse(Type.Frm == "Pole", "Pole", "Tree")))
+
+flight19_valid_s2n_H4 <- master_s2n %>%
+  filter(! Diff_maxH4 < 0) %>%
+  filter(! Diff_M4 < 0) %>%
+  mutate(Type = ifelse(Type.To == "Pole", "Pole", 
+                       ifelse(Type.Frm == "Pole", "Pole", "Tree")))
+
+#combine the two directions
+flight19_valid_H2 <- rbind(flight19_valid_n2s_H2, flight19_valid_s2n_H2)
+#flight19_valid_H4 <- rbind(flight19_valid_n2s_H4, flight19_valid_s2n_H4)
+
+#poles only
+#poles_valid_H2 <- rbind(flight19_valid_n2s_H2, flight19_valid_s2n_H2)
+
+#plot to check
+ggplot() +
+  geom_sf(data = F1_n2s, colour = "gray") + 
+  geom_sf(data = F1_s2n, colour = "gray") + 
+  geom_sf(data = flight19_valid_n2s_H2, aes(colour = Type)) +
+  geom_sf(data = flight19_valid_s2n_H2, aes(colour = Type))
+
+#tm_shape(poles_valid_H2) + 
+#  tm_lines(col = 'blue')
+
+### saving out valid trees ###
+
+st_write(flight19_valid_H2, "./Results/Flight paths/FlightPaths_2019_Valid_H2_20220328.shp", crs=3414)
+
+#st_write(poles_valid_H2, "./Results/Flight paths/FlightPaths_2019_Valid_Poles continuity_20220328.shp", crs=3414)
+
+
+```
+
+####Rasterization of vector files to heatmap
+
+```{r Rasterize 2019 flight paths, include = F}
+
+#variable control panel
+path_MLRbuffer <- "./Working layers/P5P6_FutureMLR_50mBuffer.shp"
+
+#load data
+mlr_buffer <- st_read(path_MLRbuffer)
+
+#create buffer around flight path for allowance of Colugo to swerve
+flight19_valid_n2s_buffer <- st_buffer(flight19_valid_n2s_H2, 2, endCapStyle = 'FLAT')
+flight19_valid_s2n_buffer <- st_buffer(flight19_valid_s2n_H2, 2, endCapStyle = 'FLAT')
+flight19_valid_H2_buffer <- st_buffer(flight19_valid_H2, 2, endCapStyle = 'FLAT')
+
+#rasterization
+flight19_n2s_raster = rasterize(flight19_valid_n2s_buffer, raster_template, field = 'Diff_maxH2', fun = 'count', progress = 'text')
+flight19_s2n_raster = rasterize(flight19_valid_s2n_buffer, raster_template, field = 'Diff_maxH2', fun = 'count', progress = 'text')
+
+flight19_raster_total = rasterize(flight19_valid_H2_buffer, raster_template, field = 'Diff_maxH2', fun = 'count', progress = 'text')
+
+#find min of values for overlapping cells
+rasterlist_19 <- list(flight19_n2s_raster,flight19_s2n_raster)
+stack19 <- stack(rasterlist_19)
+
+minConnectivity_19 <- min(stack19)
+
+#plot and see
+plot(flight19_raster_total)
+plot(flight19_s2n_raster)
+plot(flight19_n2s_raster)
+
+plot(minConnectivity_19)
+
+#save out rasters
+writeRaster(flight19_raster_total, "./Results/Flight paths/FlightPaths_2019_Valid_raster.tif", crs=3414)
+writeRaster(flight19_s2n_raster, "./Results/Flight paths/FlightPaths_2019_Valid_raster_s2n.tif", crs=3414)
+writeRaster(flight19_n2s_raster, "./Results/Flight paths/FlightPaths_2019_Valid_raster_n2s.tif", crs=3414)
+writeRaster(minConnectivity_19, "./Results/Flight paths/FlightPaths_2019_Valid_raster_effective connectivity.tif", crs=3414)
+
+```
+
+####Checking multi-step pathway for poles
+
+Need to check for poles being used, does it allow for multi-step pathway i.e. south to S pole to north or north to N pole to S. If not, Colugo can travel to pole but cannot get out of it.
+
+```{r Pole check, include = F}
+
+path_flight19 <- "./Results/Flight paths/FlightPaths_2019_Valid_H2_20220328.shp"
+path_trees2019 <- "./Working layers/TreesPoles_Remain2019_P5P6MLR_20210604.shp"
+genus_exclude <- 'Elaeis|Oncosperma|Strychnos|Ziziphus|Clerodendrum|Dillenia|Calliandra'
+
+#load tree data
+trees19_sf <- st_read(path_trees2019)
+
+#data transformation
+trees19_sf2<- trees19_sf %>%
+  mutate(Geom = trees19_sf$geometry) %>%
+  mutate_at("MLR_Loc", as.character) %>%
+  filter(! grepl(genus_exclude, Species)) %>%
+  filter(! Height_M < 1)
+
+trees19_buffer <- st_buffer(trees19_sf2, trees19_sf2$GlideRadii)
+
+flight19_poles <- st_read((path_flight19)) %>%
+  filter(Type %in% 'Pole') %>%
+  mutate(Pole = "Pole")
+
+sort(unique(flight19_poles$ID_To))
+sort(unique(flight19_poles$ID_Frm))
+
+poles_list <- c("Pole 7","Pole 8", "Pole 9")
+
+joined_trees19_poles <- st_join(trees19_sf2, trees19_buffer, 
+                          suffix = c(".To", ".Frm"), left = FALSE) %>%
+                          filter(ID.To %in% poles_list | 
+                                   ID.Frm %in% poles_list) %>%
+                          filter(!ID.To == ID.Frm) %>%
+                          filter(!Type.To == Type.Frm) %>%
+                          filter(MLR_Loc.To == MLR_Loc.Frm)
+
+flightlines19_poles <- st_sfc(mapply(function(a,b){st_cast(st_union(a,b),"LINESTRING")},
+                                        joined_trees19_poles$Geom.Frm,
+                                        joined_trees19_poles$Geom.To,
+                                        SIMPLIFY=FALSE), crs=3414)
+
+flight19_poles_full <- joined_trees19_poles %>%
+  st_set_geometry(flightlines19_poles) %>%
+  dplyr::select(-c(Lat.Frm, Long.Frm, Height_GR.Frm, Geom.Frm,
+                   Lat.To, Long.To, Height_GR.To, Geom.To))
+
+flightSamp <- flight19_poles_full %>%
+  mutate(maxElev = raster::extract(x = dem19_Crop, y = flight19_poles_full,
+                                   fun = max, progress = 'text'))
+
+flightSamp <- flightSamp %>%
+  mutate(diffElev_Max = maxElev-Elev.To) %>%
+  mutate(LandHeight = ifelse(diffElev_Max>1.5, diffElev_Max, 1.5))
+
+flight19 <- flightSamp
+
+F1_n2s <- flight19 %>%
+  filter(MLR_Loc.To == 'South')
+
+F1_s2n <- flight19 %>%
+  filter(MLR_Loc.To == 'North')
+
+##run through code chunk 8 and 9 accordingly and save out "poles_valid_H2"
+
+tm_shape(hoard) +
+  tm_lines(col = 'black') +
+tm_shape(flightSamp) +
+  tm_lines(col = 'gray') +
+tm_shape(flightSamp_same) +
+  tm_lines(col = 'blue') +
+tm_shape(poles_valid_H2) +
+  tm_lines(col = 'red')
+
+```
+
+####Extracting values for results
+
+```{r Extract number of paths, include = F}
+
+#variable control panel
+path_flight16 <- "./Results/Flight paths/FlightPaths_2016_Valid.shp"
+path_trees2016 <-"./Working layers/Trees_50mMLR_2016_P5P6MLR.shp"
+path_flight19 <- "./Results/Flight paths/FlightPaths_2019_Valid_H2_20220328.shp"
+path_trees2019 <- "./Working layers/TreesPoles_Remain2019_P5P6MLR.shp"
+
+#load data
+flight16 <- st_read(path_flight16)
+flight19 <- st_read(path_flight19)
+trees16 <- st_read(path_trees2016)
+trees19 <- st_read(path_trees2019)
+
+#2016
+#count number of paths per ID
+TreeFrm16 <- flight16 %>%
+  count(TrID_Fr) %>%
+  st_drop_geometry() %>%
+  rename(PathFrm = n)
+
+TreeTo16 <- flight16 %>%
+  count(TreID_T) %>%
+  st_drop_geometry() %>%
+  rename(PathTo = n)
+
+#filter away trees with no connected paths
+connected16 <- trees16 %>%
+  filter(TreeID %in% flight16$TreID_T | TreeID %in% flight16$TrID_Fr) %>%
+  left_join(TreeFrm16, by = c("TreeID" = "TrID_Fr"), keep = F) %>%
+  left_join(TreeTo16, by = c("TreeID" = "TreID_T"), keep = F) %>%
+  replace(is.na(.), 0) %>%
+  mutate(PathTotal = PathFrm + PathTo) %>%
+  mutate(Year = "2016") %>%
+  mutate(Type = 'Tree') %>%
+  relocate(Year, TreeID, Type, Species, Girth_M, Height_M, Elev, MLRLoc, PathFrm, PathTo, PathTotal) %>%
+  dplyr::select(-c("Lat", "Long", "GlideRadii", "FinalStat", "Height_GR"))
+
+#2019
+#examine by species
+TreeFrm19 <- flight19 %>%
+  count(Spcs_Fr) %>%
+  st_drop_geometry() %>%
+  rename(PathFrm = n) %>%
+  arrange(-PathFrm)
+
+TreeTo19 <- flight19 %>%
+  count(Specs_T) %>%
+  st_drop_geometry() %>%
+  rename(PathTo = n) %>%
+  arrange(-PathTo)
+
+#examine by ID
+TreeTo19 <- flight19 %>%
+  count(ID_To) %>%
+  st_drop_geometry() %>%
+  rename(PathTo = n)
+
+TreeFrm19 <- flight19 %>%
+  count(ID_Frm) %>%
+  st_drop_geometry() %>%
+  rename(PathFrm = n) %>%
+  arrange(-PathFrm)
+
+connected19 <- trees19 %>%
+  filter(ID %in% flight19$ID_To | ID %in% flight19$ID_Frm) %>%
+  left_join(TreeFrm19, by = c("ID" = "ID_Frm"), keep = F) %>%
+  left_join(TreeTo19, by = c("ID" = "ID_To"), keep = F) %>%
+  replace(is.na(.), 0) %>%
+  mutate(PathTotal = PathFrm + PathTo) %>%
+  mutate(Year = "2019") %>%
+  relocate(Year, ID, Type, Species, Girth_M, Height_M, Elev, MLR_Loc, PathFrm, PathTo, PathTotal) %>%
+  dplyr::select(-c("Lat", "Long", "GlideRadii", "Height_GR")) %>%
+  dplyr::rename(TreeID = ID) %>%
+  dplyr::rename(MLRLoc = MLR_Loc)
+
+#save out shapefile for QGIS
+st_write(connected16, "./Results/Nodes/Trees_2016_Valid.shp", crs=3414)
+st_write(connected19, "./Results/Nodes/Trees_2019_Valid.shp", crs=3414)
+
+#drop geometry to only use data frame for exploratory analysis
+#results not included in analysis
+connected16_df <- connected16 %>% 
+  st_drop_geometry()
+connected19_df <- connected19 %>% 
+  st_drop_geometry()
+
+connected <- bind_rows(connected16_df, connected19_df) %>%
+  gather(Directional, PathNum, PathFrm:PathTotal)
+
+#list of plants used in valid flight paths
+plants <- data.frame(matrix(ncol = 1, nrow = length(unique(connected$Species)))) %>%
+  mutate(Species = unique(connected$Species)) %>%
+  dplyr::select(Species) %>%
+  arrange(Species) %>%
+  mutate(Genus = gsub( " .*$", "", Species))
+
+write.csv(plants, "./Results/Nodes/Plant Species.csv")
+  
+#density plot with rug
+ggplot(connected, aes(x=PathNum, colour = Year)) +
+  geom_density() +
+  facet_wrap(vars(Directional)) +
+  geom_rug(sides="b") +  #rug draws ticks for each value
+  theme_minimal() + 
+  scale_x_continuous(limits = c(0, 100))
+
+#boxplot with variale width
+my_xlab <- paste(levels(connected$Year),"\n(N=",table(connected$Year),")",sep="")
+
+ggplot(connected, aes(x=Year, y=PathNum, fill=Year)) +
+    geom_boxplot(varwidth = TRUE, alpha=0.2) +
+    facet_wrap(vars(Directional))
+    theme(legend.position="none") +
+    scale_x_discrete(labels=my_xlab)
+
+#analysis of variance
+model <- glm(PathNum~Year*Directional, data = connected, family = poisson())
+sum(residuals(model)^2)/(df.residual(model))
+summary(model)
+anova(model)
+
+model.nb <- glm.nb(PathNum~Year*Directional, data = connected)
+summary(model.nb)
+anova(model.nb)
+
+connectedFrm <- connected %>% filter(Directional %in% 'PathFrm')
+
+frm.nb <- glm.nb(PathNum~Year, data = connectedFrm)
+summary(frm.nb)
+anova(frm.nb)
+
+```
+
+####Extracting number of pixels covered with value
+
+```{r Extract number of pixels with value, include = F}
+
+library(exactextractr)
+
+path_plotArea <- "./Working layers/Plot area.shp"
+path_MLR2016 <- "./Working layers/0. Layers used/MLR2017.shp"
+path_MLR2019 <- "./Working layers/0. Layers used/MLR2019.shp"
+path_flight16_raster <- "./Results/Flight paths/FlightPaths_2016_Valid_raster.tif"
+path_flight19_raster <- "./Results/Flight paths/FlightPaths_2019_Valid_raster.tif"
+path_flight2022 <- "./Results/Flight paths/FlightPaths_2022_Valid.shp"
+path_MLRbuffer <- "./Working layers/P5P6_FutureMLR_50mBuffer.shp"
+
+#load data
+bound <- st_read(path_plotArea)
+lr_buffer <- st_read(path_MLRbuffer)
+mlr_2016 <- st_read(path_MLR2016) %>%
+  st_union() %>%
+  st_crop(bound)
+mlr_2019 <- st_read(path_MLR2019) %>%
+  st_union() %>%
+  st_crop(bound)
+
+raster16 <- raster(path_flight16_raster)
+raster19 <- raster(path_flight19_raster)
+flight22 <- st_read(path_flight2022) %>%
+  rename(GlideFrom = MLR_L_F) %>%
+  dplyr::select(c(Diff_H, geometry))
+st_crs(flight22) <- 3414
+
+load("Best flight_12m.R")
+best_flight <- st_transform(best_flight, crs = 3414) %>%
+  dplyr::select(Diff_H, geometry)
+
+flight22_withpoles <- rbind(flight22, best_flight)
+
+#generate raster for 2022 (simulation results) first
+raster_template = raster(extent(mlr_buffer), resolution = 0.5,
+                         crs = st_crs(mlr_buffer)$proj4string)
+flight22_buffer <- st_buffer(flight22_withpoles, 2, endCapStyle = 'FLAT')
+flight22_raster = rasterize(flight22_buffer, raster_template, field = 'Diff_H', fun = 'count', progress = 'text')
+
+flight22_buffer_withoutpoles <- st_buffer(flight22, 2, endCapStyle = 'FLAT')
+flight22_raster_withoutpoles = rasterize(flight22_buffer_withoutpoles, raster_template, field = 'Diff_H', fun = 'count', progress = 'text')
+
+#calculate the proportion of pixel within polygon with value > 1
+raster16_mlr <- exact_extract(raster16, mlr_2016)
+unlist(lapply(raster16_mlr, function(x) { length(which(x$value > 1)) / nrow(x) } ))
+
+raster19_mlr <- exact_extract(raster19, mlr_2019)
+unlist(lapply(raster19_mlr, function(x) { length(which(x$value > 1)) / nrow(x) } ))
+
+raster22_mlr <- exact_extract(flight22_raster, mlr_2019)
+unlist(lapply(raster22_mlr, function(x) { length(which(x$value > 1)) / nrow(x) } ))
+
+raster22_mlr_withoutpoles <- exact_extract(flight22_raster_withoutpoles, mlr_2019)
+unlist(lapply(raster22_mlr_withoutpoles, function(x) { length(which(x$value > 1)) / nrow(x) } ))
+
+
+```
+
+

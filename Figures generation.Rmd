@@ -1,0 +1,675 @@
+---
+title: "Figure generation"
+author: "Rachel"
+date: "10/09/2021"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+```{r Load libraries and setup WD, include = F}
+
+library(tidyverse)
+library(tmap)
+library(sf)
+library(terra)
+library(grid)/
+
+setwd("~/Documents/Manuscripts/Colugo MS")
+
+```
+
+## Specifying layer inputs
+
+```{r path_layer, include = F}
+
+#path_MLR2016 <- "./Working layers/P5P6_MLR_2016.shp" #clipped to P5P6
+path_MLR2016 <- "./Working layers/0. Layers used/MLR2017.shp" #full length
+#path_MLR2019 <- "./Working layers/P5P6_FutureMLR.shp"
+path_MLR2019 <- "./Working layers/0. Layers used/MLR2019.shp"
+path_MLR2021 <- "./Working layers/MLP road plans 2021/MLR planting plantiff 2021_shaved_v2.shp"
+path_MLRplanting <- "./Working layers/MLP road plans 2021/MLR planting plantiff 2021.shp"
+path_MLRbuffer <- "./Working layers/P5P6_FutureMLR_50mBuffer.shp"
+path_plotArea <- "./Working layers/Plot area.shp"
+path_park16 <- "./Working layers/2016 Park only.shp"
+path_base <- "./Working layers/Base map.shp"
+
+path_flight16 <- "./Results/Flight paths/FlightPaths_2016_Valid.shp"
+path_flight19 <- "./Results/Flight paths/FlightPaths_2019_Valid_H2_20220328.shp"
+path_poleCon <- "./Results/Flight paths/FlightPaths_2019_Valid_Poles continuity_20220328.shp"
+
+path_trees2016 <- "./Working layers/Trees_50mMLR_2016_P5P6MLR.shp"
+path_trees2019 <- "./Working layers/TreesPoles_Remain2019_P5P6MLR.shp"
+
+path_flight16_raster <- "./Results/Flight paths/FlightPaths_2016_Valid_raster.tif"
+path_flight16_s2n <- "./Results/Flight paths/FlightPaths_2016_Valid_raster_s2n.tif"
+path_flight16_n2s <- "./Results/Flight paths/FlightPaths_2016_Valid_raster_n2s.tif"
+
+path_flight19_raster <- "./Results/Flight paths/FlightPaths_2019_Valid_raster.tif"
+path_flight19_s2n <- "./Results/Flight paths/FlightPaths_2019_Valid_raster_s2n.tif"
+path_flight19_n2s <- "./Results/Flight paths/FlightPaths_2019_Valid_raster_n2s.tif"
+
+path_flight2022 <- "./Results/Flight paths/FlightPaths_2022_Valid.shp"
+
+```
+
+## Loading data
+
+```{r load data and transform, include = F}
+
+#### base data ####
+mlr_buffer <- st_read(path_MLRbuffer)
+bound <- st_read(path_plotArea)
+mlr_2016 <- st_read(path_MLR2016) %>%
+  st_union() %>%
+  st_crop(bound)
+mlr_2019 <- st_read(path_MLR2019) %>%
+  st_union() %>%
+  st_crop(bound)
+mlr_2021 <- st_read(path_MLR2021) %>%
+  filter(! Type %in% 'Off road') %>%
+  dplyr::select(MLR_loc) %>%
+  rename(MLR_Loc = MLR_loc)
+mlr_planting <- st_read(path_MLRplanting)
+mlr_buffer <- st_read(path_MLRbuffer)
+base <- st_read(path_base) %>%
+  st_crop(bound)
+park16 <- st_read(path_park16) %>%
+  st_crop(bound)
+
+
+#### vector data ####  
+flight16 <- st_read(path_flight16)
+flight19 <- st_read(path_flight19)
+
+alstonia16 <- flight16 %>%
+  filter(grepl("Alstonia", Specs_T) | grepl("Alstonia", Spcs_Fr))
+
+flight19_poles <- flight19 %>%
+  filter(Type %in% 'Pole') %>%
+  mutate(Pole = "Pole") %>%
+  mutate(Paths = 'Paths')
+
+trees16 <- st_read(path_trees2016) %>%
+  filter(TreeID %in% flight16$TreID_T | TreeID %in% flight16$TrID_Fr)
+
+trees19 <- st_read(path_trees2019) %>%
+  filter(Type %in% 'Tree') %>%
+  filter(ID %in% flight19$ID_To | ID %in% flight19$ID_Frm)
+
+poles19 <- st_read(path_trees2019) %>%
+  filter(Type %in% 'Pole') %>%
+  mutate(Poles = ifelse(ID %in% flight19_poles$ID_To, "Used",
+                        ifelse(ID %in% flight19_poles$ID_Frm, "Used", 
+                               "Unused")))
+
+poleCon <- st_read(path_poleCon)
+
+#### raster data ####
+raster16 <- rast(path_flight16_raster)
+raster16_s2n <- rast(path_flight16_s2n)
+raster16_n2s <- rast(path_flight16_n2s)
+
+raster19 <- rast(path_flight19_raster)
+raster19_s2n <- rast(path_flight19_s2n)
+raster19_n2s <- rast(path_flight19_n2s)
+
+#### simulation data ####
+flight22 <- st_read(path_flight2022) %>%
+  rename(GlideFrom = MLR_L_F)
+
+load("Best poles_12m.R")
+load("Best flight_12m.R")
+load("Best scores_12m.R")
+load("Cont Accumulation Curve_12m.R")
+
+PoleFrm <- best_flight %>%
+  count(ID.Frm) %>%
+  st_drop_geometry() %>%
+  rename(PathFrm = n)
+
+PoleTo <- best_flight %>%
+  count(ID.To) %>%
+  st_drop_geometry() %>%
+  rename(PathFrm = n)
+
+
+```
+
+## Generate base maps
+
+```{r base map, include = F}
+
+#### color base map ####
+basemap16 <- tm_shape(base) + tm_fill(col = "Category", alpha = 0.8,
+                                      palette = c('darkseagreen2',    #Buffer zone
+                                                  'darkseagreen2',    #EcoLink
+                                                  'darkseagreen2',    #Forest
+                                                  'grey',             #MINDEF
+                                                  'darkseagreen2',    #Park
+                                                  'darkseagreen2',    #Road
+                                                  'darkslategray3'),  #Water
+                                      legend.show = FALSE) +
+            tm_shape(mlr_2016) + tm_fill(col = 'floralwhite')
+
+basemap19 <- tm_shape(base) + tm_fill(col = "Category", alpha = 0.8,
+                                    palette = c('darkseagreen',    #Buffer zone
+                                                'darkseagreen',    #EcoLink
+                                                'darkseagreen2',   #Forest
+                                                'grey',            #MINDEF
+                                                'darkseagreen',    #Park
+                                                'floralwhite',     #Road
+                                                'darkslategray3'), #Water
+                                    legend.show = FALSE)
+
+#### grayscale base map ####
+
+basemap16_gray <- tm_shape(base) + tm_fill(col = "Category", alpha = 1.0,
+                                      palette = c('gray85',     #Carpark
+                                                  'gray85',     #Ecolink
+                                                  'gray85',     #Forest
+                                                  'gray85',     #Park
+                                                  'gray85',     #Road
+                                                  'white'),     #Water
+                                      legend.show = FALSE) +
+  tm_shape(mlr_2016) + tm_fill(col = 'floralwhite') + 
+  tm_shape(park16) + tm_fill(col = "gray65")
+
+basemap19_gray <- tm_shape(base) + tm_fill(col = "Category", alpha = 1.0,
+                                           palette = c('gray95',          #Carpark
+                                                       'gray65',          #Ecolink
+                                                       'gray85',          #Forest
+                                                       'gray65',          #Park
+                                                       'floralwhite',     #Road
+                                                       'white',
+                                                       'floralwhite'),          #Water
+                                           legend.show = FALSE)
+
+#creating legends
+base16_forLegend <- base %>%
+  filter(Category %in% "Park" | Category %in% "Forest" | Category %in% "Road")
+
+base16_legend<- tm_shape(base16_forLegend) + 
+  tm_fill(col = "Category", alpha = 1.0, palette = c('gray85', 
+                                                     'gray65', 
+                                                     'floralwhite')) +
+  tm_borders(col = "black") + 
+  tm_layout(legend.only = TRUE,
+            legend.text.size = 1,
+            legend.title.size = 1.4,
+            legend.bg.color = 'white')
+
+base19_forLegend <- base %>%
+  filter(Category %in% "Park" | Category %in% "Forest" | 
+         Category %in% "Road" | Category %in% "Carpark" )
+
+base19_legend<- tm_shape(base19_forLegend) + 
+  tm_fill(col = "Category", alpha = 1.0, palette = c('gray95',
+                                                     'gray85', 
+                                                     'gray65', 
+                                                     'floralwhite')) +
+  tm_borders(col = "black") + 
+  tm_layout(legend.only = TRUE,
+            legend.text.size = 1,
+            legend.title.size = 1.4,
+            legend.bg.color = 'white')
+
+```
+
+## Figure 6. Vector 2016
+
+```{r Fig 6, include = F}
+
+flight16$Year <- "2016"
+flight16_whiskUp <- flight16 %>%
+  filter(Diff_H > 5.236918)
+flight16_Q3 <- flight16 %>%
+  filter(Diff_H < 2.512430411 & Diff_H > 1.336046726)
+
+map16 <- 
+basemap16_gray +
+  tm_graticules(n.x = 3, n.y = 3, labels.size = 1) +
+  tm_shape(mlr_2016) +
+    tm_borders(col = 'black') +
+  tm_shape(flight16) +
+    tm_lines(col = "goldenrod1", alpha = 0.35, lwd = 1.5) +
+  #tm_shape(flight16_Q3) +
+  #  tm_lines(col = "orangered2", alpha = 0.2) +
+  tm_shape(flight16_whiskUp) +
+    tm_lines(col = "firebrick3", alpha = 0.5, lwd = 1.5)
+                           
+#boxplot showing quality of glide paths
+boxplot16 <-
+ggplot(flight16, aes(x = Year, y = Diff_H)) +
+  geom_violin(width = 1, colour = 'white', 
+              fill = 'goldenrod1', alpha = 0.25) +
+  geom_boxplot(width = 0.2, 
+               colour = 'goldenrod1',
+               lwd = 0.9,
+               fill = 'goldenrod1', alpha = 0.5,
+               outlier.colour = 'firebrick3') +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, size = 1),
+        axis.title.y = element_text(size = 12),
+        axis.text.y = element_text(size = 14),
+        axis.text.x=element_blank(),
+        axis.title.x=element_blank(),
+        axis.ticks.x = element_blank()) + 
+  labs( y = substitute(paste("Glide quality values ", (italic('Diff'[Hij])))))
+
+flight19$Year <- "2019"
+
+boxplot19 <-
+ggplot(flight19, aes(x = Year, y = Dff_mH2)) +
+  geom_violin(width = 1, colour = 'white', 
+              fill = 'goldenrod1', alpha = 0.25) +
+  geom_boxplot(width = 0.2, 
+               colour = 'goldenrod1',
+               lwd = 0.9,
+               fill = 'goldenrod1', alpha = 0.5,
+               outlier.colour = 'firebrick3') +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, size = 1),
+        axis.title.y = element_text(size = 12),
+        axis.text.y = element_text(size = 14),
+        axis.text.x=element_blank(),
+        axis.title.x=element_blank(),
+        axis.ticks.x = element_blank()) + 
+  labs( y = 'Vertical allowance on departure tree per glide path (m)')
+
+
+#print plots
+#h826*1240
+png("Figure 6_map+box.png", height =  4130 , width =  6200, units = "px", res = 600)
+
+grid.newpage()
+
+print(map16, viewport(x = 0, y = 0, 
+                      width = 0.8, height = 1, 
+                      just = c("left", "bottom")))
+
+print(base16_legend, vp = viewport(x = 0.63, y = 0.7,
+                                   width = 0.3, height = 0.2,
+                                   just = c("left", "bottom")))
+
+box.vp <- viewport(x = 0.77, y = 0.055,
+                width = 0.2, height = 0.9,
+                just = c("left", "bottom"))
+pushViewport(box.vp)
+
+grid.draw(ggplotGrob(boxplot16))
+
+dev.off()
+
+```
+
+## Figure 7. Set of rasters
+
+```{r Fig 7, include = F}
+
+tmap_mode("plot")
+
+breaks16 = c(0, 20, 40, 60, 80, 250)
+breaksBI = c(0, 20, 40, 60, 250)
+
+#tmaptools::palette_explorer()
+
+#### size control panel ####
+
+gratSize <- 1
+lineWidth <- 2
+poleSize <- 0.5
+poleCol <- "blue"
+lineCol <- "lightskyblue3"
+
+#### 2016 rasters ####
+Connectivity2016 <- 
+  basemap16_gray +
+  tm_graticules(n.x = 3, n.y = 3, labels.size = gratSize, col = "gray55",
+                labels.show = c(FALSE, TRUE)) +
+  tm_shape(raster16, raster.downsample = FALSE) +
+    tm_raster(title = "per 0.5m",
+              alpha = 0.9, breaks = breaksBI, style = "cont", 
+              palette = "YlOrBr", n = 8, contrast = c(0.2, 1)) +
+  tm_shape(mlr_2016) +  
+    tm_borders() +
+  tm_layout(legend.show = FALSE)
+
+#south to north
+S2N2016 <-
+  basemap16_gray +
+  tm_graticules(n.x = 3, n.y = 3, labels.size = gratSize, col = "gray55",
+                labels.show = c(FALSE, TRUE)) +
+  tm_shape(raster16_s2n, raster.downsample = FALSE) +
+    tm_raster(title = "per 0.5m",
+            alpha = 0.9, breaks = breaksBI, style = "cont", 
+            palette = "YlOrBr", n = 8, contrast = c(0.2, 1)) +
+  tm_shape(mlr_2016) +
+    tm_borders() +
+  tm_layout(legend.show = FALSE)
+
+#north to south
+N2S2016 <- 
+  basemap16_gray +
+  tm_graticules(n.x = 3, n.y = 3, labels.size = gratSize, col = "gray55",
+                labels.show = c(TRUE, TRUE)) +
+  tm_shape(raster16_n2s, raster.downsample = FALSE) +
+    tm_raster(title = "per 0.5m",
+            alpha = 0.9, breaks = breaksBI, style = "cont", 
+            palette = "YlOrBr", n = 8, contrast = c(0.2, 1)) +
+  tm_shape(mlr_2016) +
+    tm_borders() +
+  tm_layout(legend.show = FALSE)
+
+#### 2019 rasters ####
+Connectivity2019 <- 
+  basemap19_gray +
+  tm_graticules(n.x = 3, n.y = 3, labels.size = gratSize, col = "gray55",
+                labels.show = c(FALSE, FALSE)) +
+  tm_shape(raster19, raster.downsample = FALSE) +
+  tm_raster(title = "2019",
+            alpha = 0.9, breaks = breaks16, style = "cont", 
+            palette = "YlOrBr", n = 8, contrast = c(0.2, 1)) +
+  tm_shape(mlr_2019) +
+  tm_borders() +
+  tm_shape(flight19_poles) +
+  tm_lines(col = lineCol, alpha = 0.7, lwd = lineWidth, legend.show = FALSE) +
+  tm_shape(poleCon) +
+  tm_lines(col = lineCol, alpha = 0.7, lwd = lineWidth, legend.show = FALSE) +
+  tm_shape(poles19) +
+  tm_dots(col = 'Poles', size = poleSize,
+          palette = c('gray70', poleCol)) +
+  tm_layout(legend.show = FALSE)
+
+#south to north
+poles19_s2n <- poles19 %>%
+  filter(MLR_Loc %in% 'South' & Poles %in% 'Used')
+flight19_poles_s2n <- flight19_poles %>%
+  filter(ID_To %in% poles19_s2n$ID | ID_Frm %in% poles19_s2n$ID)
+poleCon_s2n <- poleCon %>%
+  filter(ID_To %in% poles19_s2n$ID | ID_Frm %in% poles19_s2n$ID)
+
+S2N2019 <-
+  basemap19_gray +
+  tm_graticules(n.x = 3, n.y = 3, labels.size = gratSize, col = "gray55",
+                labels.show = c(FALSE, FALSE)) +
+  tm_shape(raster19_s2n, raster.downsample = FALSE) +
+  tm_raster(title = "per 0.5m",
+            alpha = 0.9, breaks = breaksBI, style = "cont", 
+            palette = "YlOrBr", n = 8, contrast = c(0.2, 1)) +
+  tm_shape(mlr_2019) +
+  tm_borders() +
+  tm_shape(flight19_poles_s2n) +
+  tm_lines(col = lineCol, alpha = 0.7, lwd = lineWidth, legend.show = FALSE) +
+  tm_shape(poleCon_s2n) +
+  tm_lines(col = lineCol, alpha = 0.7, lwd = lineWidth, legend.show = FALSE) +
+  tm_shape(poles19) +
+  tm_dots(col = 'gray70', size = poleSize) +
+  tm_shape(poles19_s2n) +
+  tm_dots(col = poleCol, size = poleSize) +
+  tm_layout(legend.show = FALSE)
+
+#north to south
+poles19_n2s <- poles19 %>%
+  filter(MLR_Loc %in% 'North' & Poles %in% 'Used')
+flight19_poles_n2s <- flight19_poles %>%
+  filter(ID_To %in% poles19_n2s$ID | ID_Frm %in% poles19_n2s$ID)
+poleCon_n2s <- poleCon %>%
+  filter(ID_To %in% poles19_n2s$ID | ID_Frm %in% poles19_n2s$ID)
+
+N2S2019 <- 
+  basemap19_gray +
+  tm_graticules(n.x = 3, n.y = 3, labels.size = gratSize, col = "gray55",
+                labels.show = c(TRUE, FALSE)) +
+  tm_shape(raster19_n2s, raster.downsample = FALSE) +
+  tm_raster(title = "per 0.5m",
+            alpha = 0.9, breaks = breaksBI, style = "cont", 
+            palette = "YlOrBr", n = 8, contrast = c(0.2, 1)) +
+  tm_shape(mlr_2019) +
+  tm_borders() +
+  tm_shape(flight19_poles_n2s) +
+  tm_lines(col = lineCol, alpha = 0.9, lwd = lineWidth, legend.show = FALSE) +
+  tm_shape(poleCon_n2s) +
+  tm_lines(col = lineCol, alpha = 0.7, lwd = lineWidth, legend.show = FALSE) +
+  tm_shape(poles19) +
+  tm_dots(col = 'gray70', size = poleSize) +
+  tm_shape(poles19_n2s) +
+  tm_dots(col = poleCol, size = poleSize) +
+  tm_layout(legend.show = FALSE)
+
+#### legend ####
+legend.map <- 
+  tm_shape(raster16, raster.downsample = FALSE) + 
+  tm_raster(title = "Number of paths per pixel", 
+            breaks = breaksBI, style = "cont", 
+            palette = "YlOrBr", n = 8, contrast = c(0.2, 1)) +
+  tm_shape(poles19) +
+  tm_dots(col = 'Poles', size = poleSize,
+          palette = c('gray70', poleCol)) +
+  tm_shape(flight19_poles) +
+  tm_lines(col = "Paths", alpha = 0.9, lwd = lineWidth, 
+           palette = lineCol, labels = "Via pole") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1.7, legend.title.size = 1.5) +
+  base19_legend
+
+#### print set ####
+png("Figure 7_rasters.png", height =  4956 , width =  5120, units = "px", res = 300)
+
+grid.newpage()
+page.layout <- grid.layout(nrow = 4, ncol = 3,
+                           heights = unit(c(1, 4, 4, 4), "null"),
+                           widths = unit(c(4, 4, 3), "null"))
+pushViewport(viewport(layout = page.layout))
+grid.text("Pre-development", vp = viewport(x = -0.29, y = 0.45,
+                                just = c("left", "bottom")),
+          gp=gpar(fontsize=27, col="black"))
+grid.text("Construction phase", vp = viewport(x = 0.07, y = 0.45,
+                                just = c("left", "bottom")),
+          gp=gpar(fontsize=27, col="black"))
+print(Connectivity2016, vp=viewport(layout.pos.row = 2, layout.pos.col = 1,
+                                    just = c("right","bottom")))
+print(Connectivity2019, vp=viewport(layout.pos.row = 2, layout.pos.col = 2,
+                                    just = c("left","bottom")))
+print(S2N2016, vp=viewport(layout.pos.row = 3, layout.pos.col = 1, 
+                           just = c("right","bottom")))
+print(S2N2019, vp=viewport(layout.pos.row = 3, layout.pos.col = 2,
+                           just = c("left","bottom")))
+print(N2S2016, vp=viewport(layout.pos.row = 4, layout.pos.col = 1,
+                           just = c("right","bottom")))
+print(N2S2019, vp=viewport(layout.pos.row = 4, layout.pos.col = 2,
+                           just = c("left","bottom")))
+
+print(legend.map, vp = viewport(x = 0.72, y = 0.47,
+                                just = c("left", "bottom")))
+
+#save plot
+dev.off()
+
+```
+
+## Figure 8. Step accumulation curve
+
+```{r Fig 8}
+
+png("Figure 8_Step accumulation.png", height =  5400, width =  3600, units = "px", res = 600)
+
+ggplot(ContAccum, aes(x = Generation, y = MaxConnectivity)) + 
+  geom_rect(xmin=8, xmax=17, ymin=0, ymax=Inf, fill = "gray95") +
+  geom_rect(xmin=28, xmax=43, ymin=0, ymax=Inf, fill = "gray95") +
+  geom_step(size = 1) +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, size = 1),
+        axis.title.y = element_text(size = 22),
+        axis.text.y = element_text(size = 19),
+        axis.title.x = element_text(size = 22),
+        axis.text.x = element_text(size = 19)) +
+  annotate(geom = "text", x = 11, y = 85, 
+           label = "n=9", hjust = "left", size = 7) +
+  annotate(geom = "text", x = 32.5, y = 85, 
+           label = "n=15", hjust = "left", size = 7) +
+  labs( y = 'Fitness value of the best simulated scenarios',
+        x = 'Number of simulated generations')
+
+dev.off()
+
+```
+
+## Figure 9. Pole simulation results
+
+```{r Fig. 9, include = F}
+#data transformation
+UniBi <- best_score %>%
+  group_by(ID) %>%
+  count() %>%
+  rename(Bi = n)
+UniBi <- as.data.frame(UniBi)
+
+test <- merge(UniBi, best_score %>% as.data.frame(), by = "ID", all = T) %>%
+  mutate_at(.vars = c("Direction", "Bi"), .funs = funs(as.character(.)))
+BiTest <- test %>%
+  mutate(Bi = ifelse(test$Bi %in% "1" , Direction, "Bi")) %>%
+  dplyr::select(c(ID, Bi)) %>%
+  distinct()
+
+best_flight <- best_flight %>%
+  mutate(ID = ifelse(Type.To %in% "Pole", ID.To,
+                     ifelse(Type.Frm %in% "Pole", ID.Frm, NA)))
+
+best_flightDF <- inner_join(best_flight %>% as.data.frame(), BiTest, by = "ID") %>%
+  rename(Paths = Type.To)
+
+best_flight2 <- st_set_geometry(best_flightDF, st_geometry(best_flight)) 
+
+
+best_poles2 <- inner_join(best_poles %>% as.data.frame(), BiTest, by = "ID") %>%
+  st_set_geometry(st_geometry(best_poles)) %>%
+  mutate(Bi = ifelse(Bi %in% "Bi", "Bidirectional", "Unidirectional"))
+
+#plot settings
+gratSize <- 1
+lineWidth <- 3
+poleSize <- 0.5
+
+#A0BFCF = light blue
+#4FA5D0 = candy blue
+#D55672 = pink
+#19966B = green
+
+#### map only ####
+map <- 
+basemap19_gray +
+  tm_graticules(n.x = 3, n.y = 3, labels.size = 1.3) +
+tm_shape(mlr_planting) +
+  tm_fill(col = "darkseagreen3") +
+tm_shape(flight22) +
+  tm_lines(col = "#FFC95C", 
+           lwd = lineWidth, alpha = 0.6,
+           legend.col.show = FALSE, legend.lwd.show = FALSE) +
+tm_shape(best_flight2) +
+  tm_lines(col = "lightskyblue3",
+           lwd = lineWidth, alpha = 0.8,
+           legend.show = FALSE) +
+tm_shape(best_poles2) +
+  tm_dots(col = "Bi", pal = c("brown3", "blue"), #chartreuse2,
+          size = poleSize, legend.show = FALSE) +
+  tm_text("ID", size = 1.3, just = "right", 
+          bg.color = "floralwhite", bg.alpha = 0.8,
+          xmod = -1, ymod = -1)
+
+#### legend ####
+F4legend.map <- 
+tm_shape(best_flight2) +
+  tm_lines(col = "Paths", lwd = lineWidth, alpha = 0.8, 
+           palette = c('lightskyblue3','#FFC95C'), 
+           labels = c("Paths via poles", "Paths via trees")) +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = 1.2, legend.title.size = 1.7) +
+tm_shape(best_poles2) +
+  tm_dots(col = "Bi", pal = c("brown3", "blue"), #chartreuse2
+          size = poleSize, title = "Directionality") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = 1.2, legend.title.size = 1.7) +
+tm_add_legend(type = "fill", 
+              col = c('gray95', 'gray85', 'gray75', 'floralwhite', 'darkseagreen3'),
+              border.col = 'black',
+              labels = c("Carpark", "Forest", "Park", "Road", "Planting verges"),
+              border.lwd = 1,
+              title = "Category")
+
+#combining map and legend
+png("Figure 9_Simulation results.png", height =  3600 , width =  3600, units = "px", res = 300)
+
+grid.newpage()
+page.layout <- grid.layout(nrow = 1, ncol = 1)
+pushViewport(viewport(layout = page.layout))
+
+print(map, vp=viewport(layout.pos.row = 1, layout.pos.col = 1,
+                           just = c("left","bottom")))
+
+grid.rect(x = unit(0.76, "npc"), y = unit(0.57, "npc"),
+          width = unit(0.21, "npc"), height = unit(0.34, "npc"),
+          just = c("left", "bottom"))
+
+print(F4legend.map, vp = viewport(x = 0.75, y = 0.56,
+                                just = c("left", "bottom")))
+
+dev.off()
+
+```
+
+
+## Figure 5 Glide ratio model
+
+```{r glide ratio model, include = F}
+
+glide <- read.csv("./R/Glide ratio.csv", header = T)
+
+png("Figure 5_Glide ratio.png", height =  2200 , width =  3600, units = "px", res = 600)
+
+ggplot(data = glide, aes(x=H_dist, y=Glide_ratio)) +
+  geom_point(size = 1, color = "gray50") +
+  stat_smooth(method = "lm", formula = y ~ log(x), se = F,
+              color = "black", size = 0.6) +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, size = 0.5),
+        axis.title.y = element_text(size = 9),
+        axis.text.y = element_text(size = 7),
+        axis.title.x = element_text(size = 9),
+        axis.text.x = element_text(size = 7),
+        axis.ticks = element_line(size = 0.3)) +
+  theme(plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm"))+
+  annotate(geom = "text", x = 32, y = 2.4, 
+           label = "y = 0.838ln(x) + 0.046", hjust = "left", size = 4) +
+  annotate(geom = "text", x = 35, y = 2.1, 
+           label = expression('R'^2*~'= 0.6978'), hjust = "left", size = 4) +
+  labs(y = "Glide ratio",
+       x = "Horizontal glide distance (m)")
+
+dev.off()
+
+```
+
+## Calculate amount of pixel with glide path i.e., Coverage
+
+```{r Rasterize for coverage, include = F}
+
+flight22_buffer <- st_buffer(flight22, 2, endCapStyle = 'FLAT')
+
+#rasterize each direction first
+mlrSpat <- vect(mlr_2019)
+raster_template = rast(mlrSpat, resolution = 0.5)
+
+flight22_raster = rasterize(vect(flight22_buffer), raster_template, sum = TRUE, progress = 'text')
+
+plot(flight22_raster)
+
+
+```
+

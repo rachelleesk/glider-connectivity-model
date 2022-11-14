@@ -1,0 +1,318 @@
+---
+title: "Figures for flowchart"
+author: "Rachel"
+date: "6/25/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r load libraries and WD, include=FALSE}
+
+library(tidyverse)
+library(tmap)
+library(sf)
+library(terra)
+library(grid)
+
+setwd("~/Documents/Manuscripts/Colugo MS")
+
+```
+
+## Creating base map (2019 scenario)
+
+```{r base map creation, echo=FALSE, include=FALSE}
+
+#### setting file paths ####
+path_MLR2019full <- "./Working layers/0. Layers used/MLR2019.shp"
+path_MLR2019 <-  "./Working layers/MLP road plans 2021/MLR planting plantiff 2021_shaved_v2.shp"
+path_plotArea <- "./Working layers/Plot area.shp"
+path_park16 <- "./Working layers/2016 Park only.shp"
+path_base <- "./Working layers/Base map.shp"
+
+#### base data ####
+bound <- st_read(path_plotArea)
+mlr_2019full <- st_read(path_MLR2019full) %>%
+  st_union() %>%
+  st_crop(bound)
+mlr_planting <- st_read(path_MLR2019) %>%
+  filter(! Type %in% 'Off road') %>%
+  dplyr::select(MLR_loc) %>%
+  rename(MLR_Loc = MLR_loc) %>%
+  st_crop(bound)
+base <- st_read(path_base) %>%
+  st_crop(bound)
+park16 <- st_read(path_park16) %>%
+  st_crop(bound)
+
+
+
+#### basemap ####
+basemap19_gray <- tm_shape(base) + tm_fill(col = "Category", alpha = 1.0,
+                                           palette = c('gray95',        #Carpark
+                                                       'gray65',        #Ecolink
+                                                       'gray85',        #Forest
+                                                       'gray65',        #Park
+                                                       'floralwhite',   #Road
+                                                       'white',
+                                                       'floralwhite'),  #Water
+                                           legend.show = FALSE)
+
+base19_forLegend <- base %>%
+  filter(Category %in% "Park" | Category %in% "Forest" | 
+         Category %in% "Road" | Category %in% "Carpark" )
+
+base19_legend<- tm_shape(base19_forLegend) + 
+  tm_fill(col = "Category", alpha = 1.0, palette = c('gray95',
+                                                     'gray85', 
+                                                     'gray65', 
+                                                     'floralwhite')) +
+  tm_borders(col = "black") + 
+  tm_layout(legend.only = TRUE,
+            legend.text.size = 1.3,
+            legend.title.size = 1.8,
+            legend.bg.color = 'white')
+
+#### with planting verge ####
+#plot settings
+map <- 
+basemap19_gray +
+tm_shape(mlr_planting) +
+  tm_fill(col = "darkseagreen3")
+
+map
+
+```
+
+## Generating one scenario
+
+```{r scenario, include = F}
+
+source("~/Documents/Manuscripts/Colugo MS/R/functions.R")
+load("../Pole_attributes_12m.RData")
+
+#number of simulation scenario to generate
+n = 1
+
+#min distance between points
+buffer_size <- 25
+
+#run chunks 3 & 4 in Colugo flight simulation.Rmd
+
+```
+
+```{r set plot parameters, include = F}
+
+poleSize <- 1.8
+lineWidth <- 7.0
+legendText <- 2.4
+legendTitle <- 2.8
+
+treeCol <- "#0B6F50"
+
+poleCol <- "#DDB500"
+poleCol2 <- "#EB8816"
+poleCol3 <- "#721817"
+
+flightCol <- "#66B3BA"
+flightCol2 <- "#2B3A67"
+
+```
+
+
+```{r plot simulation scenario for flowchart, include = F}
+
+Scenario <- 
+map +
+#tm_shape(trees19) +
+#  tm_symbols(shape = 24, col = treeCol, border.lwd = 0, size = poleSize) +
+tm_shape(poles2) +
+  tm_dots(col = poleCol, size = poleSize)
+
+legend.scenario <-
+#tm_shape(trees19) +
+#  tm_symbols(shape = 24, pal = treeCol, size = poleSize) +
+#  tm_add_legend(type = 'symbol', shape = 24, 
+#                col = treeCol, size = poleSize, label = "Trees", title = "Legend") +
+#  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+#            scale = 1, legend.text.size = 1, legend.title.size = 1.4, 
+#            legend.title.fontface = "bold") +
+tm_shape(poles2) +
+  tm_dots(col = poleCol, size = poleSize*1.2) +
+  tm_add_legend(type = 'symbol', 
+                col = poleCol, size = poleSize*1.2, border.col = NA,
+                label = "Poles (n=15)",
+                title = "Legend") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = legendText, 
+            legend.title.size = legendTitle, legend.title.fontface = "bold")
+  
+legend.scenario <-
+legend.scenario +
+tm_shape(mlr_planting) +
+  tm_fill(col = "darkseagreen3") + 
+  tm_add_legend(type = 'fill', 
+                col = "darkseagreen3", size = poleSize,
+                border.col = NA, border.lwd = 1,
+                label = "Planting verges") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = legendText)
+
+png("Flowchart_Simulation.png", height =  800 , width =  800, units = "px")
+
+grid.newpage()
+page.layout <- grid.layout(nrow = 1, ncol = 1)
+pushViewport(viewport(layout = page.layout))
+
+print(Scenario, vp=viewport(layout.pos.row = 1, layout.pos.col = 1,
+                           just = c("left","bottom")))
+
+grid.rect(x = unit(0.62, "npc"), y = unit(0.72, "npc"),
+          width = unit(0.35, "npc"), height = unit(0.21, "npc"),
+          just = c("left", "bottom"))
+
+print(legend.scenario, vp = viewport(x = 0.61, y = 0.70,
+                                just = c("left", "bottom")))
+
+dev.off()
+
+
+```
+
+```{r plot flight scenario for flowchart, include = F}
+
+#remove flights where pole not valid
+best_flight <- best_flight %>%
+  mutate(ID = ifelse(Type.To %in% "Pole", ID.To,
+                     ifelse(Type.Frm %in% "Pole", ID.Frm, NA))) %>%
+  filter(ID %in% best_poles$ID)
+
+#plot with flights where DiffHj > 0 & Valid poles
+ScenarioFlight <-
+map +
+tm_shape(scenario_flight) +
+  tm_lines(col = flightCol, alpha = 0.6) +
+tm_shape(best_flight) +
+  tm_lines(col = flightCol2) +
+tm_shape(poles2) +
+  tm_dots(col = poleCol, size = poleSize) +
+tm_shape(best_poles) +
+  tm_dots(col = poleCol2, size = poleSize)
+
+#legend for scenario flight
+legend.ScenarioFlight <-
+tm_shape(scenario_flight) +
+  tm_lines(col = flightCol, alpha = 0.6) +
+  tm_add_legend(type = 'line', 
+                col = flightCol, alpha = 0.6, lwd = lineWidth,
+                label = "All flight paths generated",
+                title = "Legend") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = legendText, 
+            legend.title.size = legendTitle, legend.title.fontface = "bold") +
+tm_shape(best_flight) +
+  tm_lines(col = flightCol2) +
+  tm_add_legend(type = 'line', 
+                col = flightCol2, lwd = lineWidth, 
+                label = "Valid flight paths retained") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = legendText) +
+tm_shape(poles2) +
+  tm_dots(col = poleCol, size = poleSize*1.2) +
+  tm_add_legend(type = 'symbol', 
+                col = poleCol, size = poleSize*1.2, border.col = NA,
+                label = "Poles generated (n=15)") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = legendText) +
+tm_shape(best_poles) +
+  tm_dots(col = poleCol2, size = poleSize*1.2) +
+  tm_add_legend(type = 'symbol', 
+                col = poleCol2, size = poleSize*1.2, border.col = NA,
+                label = "Poles retained  (n=7)") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = legendText)
+
+png("Flowchart_Simulation with flight.png", height =  800 , width =  800, units = "px")
+
+grid.newpage()
+page.layout <- grid.layout(nrow = 1, ncol = 1)
+pushViewport(viewport(layout = page.layout))
+
+print(ScenarioFlight, vp=viewport(layout.pos.row = 1, layout.pos.col = 1,
+                           just = c("left","bottom")))
+
+grid.rect(x = unit(0.46, "npc"), y = unit(0.55, "npc"),
+          width = unit(0.51, "npc"), height = unit(0.37, "npc"),
+          just = c("left", "bottom"))
+
+print(legend.ScenarioFlight, vp = viewport(x = 0.45, y = 0.53,
+                                just = c("left", "bottom")))
+
+dev.off()
+
+
+```
+
+```{r plot simulation of mutation, include = F}
+
+#gen <- 1
+#x <- 1
+#r <- 1
+#s <- x + r
+#newValue <- (100*gen) + r + x
+#gen1_pole <- evoShift(best_poles) %>%
+#      st_cast("POINT")
+#save(gen1_pole, file = "Sample simulation_gen1 poles.RData")
+#load("Sample simulation_gen1 poles.R")
+
+ScenarioMutate <-
+map +
+tm_shape(best_poles) +
+  tm_dots(col = poleCol2, size = poleSize, 
+          alpha = 0.8) +
+tm_shape(gen1_pole) +
+  tm_dots(col = poleCol3 , size = poleSize, 
+          alpha = 0.8)
+
+legend.ScenarioMutate <- 
+tm_shape(best_poles) +
+  tm_dots(col = poleCol2, size = poleSize*1.2, alpha = 0.8) +
+  tm_add_legend(type = 'symbol', 
+                col = poleCol2, size = poleSize*1.2, alpha = 0.8,
+                border.col = NA,
+                label = "Poles retained (n=7)",
+                title = "Legend") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = legendText,
+            legend.title.size = legendTitle, 
+            legend.title.fontface = "bold") +
+tm_shape(gen1_pole) +
+  tm_dots(col = poleCol3, size = poleSize*1.2) +
+  tm_add_legend(type = 'symbol', 
+                col = poleCol3, size = poleSize*1.2, alpha = 0.8,
+                border.col = NA,
+                label = "Mutated retained poles (n=7)") +
+  tm_layout(legend.only = TRUE, legend.position = c("left","bottom"),
+            scale = 1, legend.text.size = legendText)
+
+png("Flowchart_Simulation of mutation.png", height =  800 , width =  800, units = "px")
+
+grid.newpage()
+page.layout <- grid.layout(nrow = 1, ncol = 1)
+pushViewport(viewport(layout = page.layout))
+
+print(ScenarioMutate, vp=viewport(layout.pos.row = 1, layout.pos.col = 1,
+                           just = c("left","bottom")))
+
+grid.rect(x = unit(0.43, "npc"), y = unit(0.71, "npc"),
+          width = unit(0.54, "npc"), height = unit(0.22, "npc"),
+          just = c("left", "bottom"))
+
+print(legend.ScenarioMutate, vp = viewport(x = 0.41, y = 0.69,
+                                just = c("left", "bottom")))
+
+
+dev.off()
+
+```
+
