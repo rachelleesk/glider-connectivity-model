@@ -1,5 +1,5 @@
 # glider-connectivity-model
-
+[![DOI](https://zenodo.org/badge/565328138.svg)](https://zenodo.org/badge/latestdoi/565328138)
 ## About
 
 This set of `rmd` files demonstrates the connectivity analysis for Sunda colugo in:
