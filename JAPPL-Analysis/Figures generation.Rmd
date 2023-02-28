@@ -15,7 +15,7 @@ library(tidyverse)
 library(tmap)
 library(sf)
 library(terra)
-library(grid)/
+library(grid)
 
 setwd("~/Documents/Manuscripts/Colugo MS")
 
@@ -25,9 +25,7 @@ setwd("~/Documents/Manuscripts/Colugo MS")
 
 ```{r path_layer, include = F}
 
-#path_MLR2016 <- "./Working layers/P5P6_MLR_2016.shp" #clipped to P5P6
 path_MLR2016 <- "./Working layers/0. Layers used/MLR2017.shp" #full length
-#path_MLR2019 <- "./Working layers/P5P6_FutureMLR.shp"
 path_MLR2019 <- "./Working layers/0. Layers used/MLR2019.shp"
 path_MLR2021 <- "./Working layers/MLP road plans 2021/MLR planting plantiff 2021_shaved_v2.shp"
 path_MLRplanting <- "./Working layers/MLP road plans 2021/MLR planting plantiff 2021.shp"
@@ -37,21 +35,21 @@ path_park16 <- "./Working layers/2016 Park only.shp"
 path_base <- "./Working layers/Base map.shp"
 
 path_flight16 <- "./Results/Flight paths/FlightPaths_2016_Valid.shp"
-path_flight19 <- "./Results/Flight paths/FlightPaths_2019_Valid_H2_20220328.shp"
-path_poleCon <- "./Results/Flight paths/FlightPaths_2019_Valid_Poles continuity_20220328.shp"
+path_flight19 <- "./Results/Flight paths/FlightPaths_2019_Valid_H2_20221201.shp"
+path_poleCon <- "./Results/Flight paths/FlightPaths_2019_Valid_Poles continuity_20221201.shp"
 
-path_trees2016 <- "./Working layers/Trees_50mMLR_2016_P5P6MLR.shp"
-path_trees2019 <- "./Working layers/TreesPoles_Remain2019_P5P6MLR.shp"
+path_trees2016 <- "./Working layers/Trees_50mMLR_2016_P5P6MLR.shp" #Trees_2016_updated.shp
+path_trees2019 <- "./Working layers/TreesPoles_Remain2019_P5P6MLR_20210604.shp" #TreesPoles_2019_updated.shp
 
 path_flight16_raster <- "./Results/Flight paths/FlightPaths_2016_Valid_raster.tif"
 path_flight16_s2n <- "./Results/Flight paths/FlightPaths_2016_Valid_raster_s2n.tif"
 path_flight16_n2s <- "./Results/Flight paths/FlightPaths_2016_Valid_raster_n2s.tif"
 
-path_flight19_raster <- "./Results/Flight paths/FlightPaths_2019_Valid_raster.tif"
-path_flight19_s2n <- "./Results/Flight paths/FlightPaths_2019_Valid_raster_s2n.tif"
-path_flight19_n2s <- "./Results/Flight paths/FlightPaths_2019_Valid_raster_n2s.tif"
+path_flight19_raster <- "./Results/Flight paths/FlightPaths_2019_Valid_raster_20221201.tif"
+path_flight19_s2n <- "./Results/Flight paths/FlightPaths_2019_Valid_raster_s2n_20221201.tif"
+path_flight19_n2s <- "./Results/Flight paths/FlightPaths_2019_Valid_raster_n2s_20221201.tif"
 
-path_flight2022 <- "./Results/Flight paths/FlightPaths_2022_Valid.shp"
+path_flight2022 <- "./Results/Flight paths/FlightPaths_2022_Valid_20221201.shp"
 
 ```
 
@@ -68,11 +66,13 @@ mlr_2016 <- st_read(path_MLR2016) %>%
 mlr_2019 <- st_read(path_MLR2019) %>%
   st_union() %>%
   st_crop(bound)
-mlr_2021 <- st_read(path_MLR2021) %>%
-  filter(! Type %in% 'Off road') %>%
+# mlr_2021 <- st_read(path_MLR2021) %>%
+mlr_planting <- st_read(path_MLR2021) %>%
+  # filter(! Type %in% 'Off road') %>%
   dplyr::select(MLR_loc) %>%
   rename(MLR_Loc = MLR_loc)
-mlr_planting <- st_read(path_MLRplanting)
+# mlr_planting <- st_read(path_MLRplanting)
+
 mlr_buffer <- st_read(path_MLRbuffer)
 base <- st_read(path_base) %>%
   st_crop(bound)
@@ -120,10 +120,17 @@ raster19_n2s <- rast(path_flight19_n2s)
 flight22 <- st_read(path_flight2022) %>%
   rename(GlideFrom = MLR_L_F)
 
-load("Best poles_12m.R")
-load("Best flight_12m.R")
-load("Best scores_12m.R")
-load("Cont Accumulation Curve_12m.R")
+#Norman's M2 run (Main manuscript)
+load("../Colugo MS/Results/Simulation/Pole Height 12m_Norman M2/Best poles.R")
+load("../Colugo MS/Results/Simulation/Pole Height 12m_Norman M2/Best flight.R")
+load("../Colugo MS/Results/Simulation/Pole Height 12m_Norman M2/Best scores.R")
+load("../Colugo MS/Results/Simulation/Pole Height 12m_Norman M2/Cont Accumulation Curve_12m.R")
+
+# #Rachel's M2 run edit (Supporting Information S3)
+# load("../Colugo MS/Results/Simulation/Pole Height 12m/Best poles.R")
+# load("../Colugo MS/Results/Simulation/Pole Height 12m/Best flight.R")
+# load("../Colugo MS/Results/Simulation/Pole Height 12m/Best scores.R")
+# load("../Colugo MS/Results/Simulation/Pole Height 12m/Cont Accumulation Curve_12m.R")
 
 PoleFrm <- best_flight %>%
   count(ID.Frm) %>%
@@ -134,7 +141,6 @@ PoleTo <- best_flight %>%
   count(ID.To) %>%
   st_drop_geometry() %>%
   rename(PathFrm = n)
-
 
 ```
 
@@ -197,9 +203,10 @@ base16_legend<- tm_shape(base16_forLegend) +
                                                      'floralwhite')) +
   tm_borders(col = "black") + 
   tm_layout(legend.only = TRUE,
-            legend.text.size = 1,
-            legend.title.size = 1.4,
-            legend.bg.color = 'white')
+            legend.text.size = 0.8,
+            legend.title.size = 1,
+            legend.bg.color = 'white',
+            legend.height = 1)
 
 base19_forLegend <- base %>%
   filter(Category %in% "Park" | Category %in% "Forest" | 
@@ -212,8 +219,8 @@ base19_legend<- tm_shape(base19_forLegend) +
                                                      'floralwhite')) +
   tm_borders(col = "black") + 
   tm_layout(legend.only = TRUE,
-            legend.text.size = 1,
-            legend.title.size = 1.4,
+            legend.text.size = 0.8,
+            legend.title.size = 1.2,
             legend.bg.color = 'white')
 
 ```
@@ -234,11 +241,11 @@ basemap16_gray +
   tm_shape(mlr_2016) +
     tm_borders(col = 'black') +
   tm_shape(flight16) +
-    tm_lines(col = "goldenrod1", alpha = 0.35, lwd = 1.5) +
+    tm_lines(col = "goldenrod1", alpha = 0.35, lwd = 1) +
   #tm_shape(flight16_Q3) +
   #  tm_lines(col = "orangered2", alpha = 0.2) +
   tm_shape(flight16_whiskUp) +
-    tm_lines(col = "firebrick3", alpha = 0.5, lwd = 1.5)
+    tm_lines(col = "firebrick3", alpha = 0.5, lwd = 1)
                            
 #boxplot showing quality of glide paths
 boxplot16 <-
@@ -253,8 +260,8 @@ ggplot(flight16, aes(x = Year, y = Diff_H)) +
   theme(panel.grid = element_blank(),
         panel.background = element_blank(),
         panel.border = element_rect(colour = "black", fill = NA, size = 1),
-        axis.title.y = element_text(size = 12),
-        axis.text.y = element_text(size = 14),
+        axis.title.y = element_text(size = 10),
+        axis.text.y = element_text(size = 9),
         axis.text.x=element_blank(),
         axis.title.x=element_blank(),
         axis.ticks.x = element_blank()) + 
@@ -274,8 +281,8 @@ ggplot(flight19, aes(x = Year, y = Dff_mH2)) +
   theme(panel.grid = element_blank(),
         panel.background = element_blank(),
         panel.border = element_rect(colour = "black", fill = NA, size = 1),
-        axis.title.y = element_text(size = 12),
-        axis.text.y = element_text(size = 14),
+        axis.title.y = element_text(size = 10),
+        axis.text.y = element_text(size = 9),
         axis.text.x=element_blank(),
         axis.title.x=element_blank(),
         axis.ticks.x = element_blank()) + 
@@ -284,7 +291,7 @@ ggplot(flight19, aes(x = Year, y = Dff_mH2)) +
 
 #print plots
 #h826*1240
-png("Figure 6_map+box.png", height =  4130 , width =  6200, units = "px", res = 600)
+png("Figure 6_map+box.png", height =  20 , width =  30, units = "mm", res = 300)
 
 grid.newpage()
 
@@ -292,7 +299,7 @@ print(map16, viewport(x = 0, y = 0,
                       width = 0.8, height = 1, 
                       just = c("left", "bottom")))
 
-print(base16_legend, vp = viewport(x = 0.63, y = 0.7,
+print(base16_legend, vp = viewport(x = 0.62, y = 0.7,
                                    width = 0.3, height = 0.2,
                                    just = c("left", "bottom")))
 
@@ -499,8 +506,9 @@ dev.off()
 png("Figure 8_Step accumulation.png", height =  5400, width =  3600, units = "px", res = 600)
 
 ggplot(ContAccum, aes(x = Generation, y = MaxConnectivity)) + 
-  geom_rect(xmin=8, xmax=17, ymin=0, ymax=Inf, fill = "gray95") +
-  geom_rect(xmin=28, xmax=43, ymin=0, ymax=Inf, fill = "gray95") +
+  geom_rect(xmin=14, xmax=24, ymin=0, ymax=Inf, fill = "gray95") +
+  geom_rect(xmin=44, xmax=51, ymin=0, ymax=Inf, fill = "gray95") +
+  geom_rect(xmin=52, xmax=70, ymin=0, ymax=Inf, fill = "gray95") +
   geom_step(size = 1) +
   theme(panel.grid = element_blank(),
         panel.background = element_blank(),
@@ -509,10 +517,12 @@ ggplot(ContAccum, aes(x = Generation, y = MaxConnectivity)) +
         axis.text.y = element_text(size = 19),
         axis.title.x = element_text(size = 22),
         axis.text.x = element_text(size = 19)) +
-  annotate(geom = "text", x = 11, y = 85, 
-           label = "n=9", hjust = "left", size = 7) +
-  annotate(geom = "text", x = 32.5, y = 85, 
-           label = "n=15", hjust = "left", size = 7) +
+  annotate(geom = "text", x = 15, y = 82.5, 
+           label = "n=10", hjust = "left", size = 6) +
+  annotate(geom = "text", x = 44.5, y = 85, 
+           label = "n=7", hjust = "left", size = 6) +
+  annotate(geom = "text", x = 57, y = 85, 
+           label = "n=18", hjust = "left", size = 6) +
   labs( y = 'Fitness value of the best simulated scenarios',
         x = 'Number of simulated generations')
 
@@ -524,20 +534,20 @@ dev.off()
 
 ```{r Fig. 9, include = F}
 #data transformation
-UniBi <- best_score %>%
+UniBi <- best_scores %>%
   group_by(ID) %>%
   count() %>%
   rename(Bi = n)
 UniBi <- as.data.frame(UniBi)
 
-test <- merge(UniBi, best_score %>% as.data.frame(), by = "ID", all = T) %>%
+test <- merge(UniBi, best_scores %>% as.data.frame(), by = "ID", all = T) %>%
   mutate_at(.vars = c("Direction", "Bi"), .funs = funs(as.character(.)))
 BiTest <- test %>%
   mutate(Bi = ifelse(test$Bi %in% "1" , Direction, "Bi")) %>%
   dplyr::select(c(ID, Bi)) %>%
   distinct()
 
-best_flight <- best_flight %>%
+best_flight <- best_flight %>% #just confirming that only involves poles
   mutate(ID = ifelse(Type.To %in% "Pole", ID.To,
                      ifelse(Type.Frm %in% "Pole", ID.Frm, NA)))
 
@@ -545,7 +555,6 @@ best_flightDF <- inner_join(best_flight %>% as.data.frame(), BiTest, by = "ID") 
   rename(Paths = Type.To)
 
 best_flight2 <- st_set_geometry(best_flightDF, st_geometry(best_flight)) 
-
 
 best_poles2 <- inner_join(best_poles %>% as.data.frame(), BiTest, by = "ID") %>%
   st_set_geometry(st_geometry(best_poles)) %>%
@@ -560,6 +569,17 @@ poleSize <- 0.5
 #4FA5D0 = candy blue
 #D55672 = pink
 #19966B = green
+
+# trees19_new <- trees19_old
+# 
+# tm_shape(trees19) +
+#   tm_dots(col = "gray", alpha = 0.5) +
+# tm_shape(trees19_new) +
+#   tm_dots(col = "red", alpha = 0.5) +
+# tm_shape(best_flight) +
+#   tm_lines(col = "lightskyblue3",
+#            lwd = 3, alpha = 0.8,
+#            legend.show = FALSE)
 
 #### map only ####
 map <- 
@@ -578,7 +598,7 @@ tm_shape(best_flight2) +
 tm_shape(best_poles2) +
   tm_dots(col = "Bi", pal = c("brown3", "blue"), #chartreuse2,
           size = poleSize, legend.show = FALSE) +
-  tm_text("ID", size = 1.3, just = "right", 
+  tm_text("ID", size = 1.1, just = "right", 
           bg.color = "floralwhite", bg.alpha = 0.8,
           xmod = -1, ymod = -1)
 
@@ -623,7 +643,6 @@ dev.off()
 
 ```
 
-
 ## Figure 5 Glide ratio model
 
 ```{r glide ratio model, include = F}
@@ -656,20 +675,4 @@ dev.off()
 
 ```
 
-## Calculate amount of pixel with glide path i.e., Coverage
-
-```{r Rasterize for coverage, include = F}
-
-flight22_buffer <- st_buffer(flight22, 2, endCapStyle = 'FLAT')
-
-#rasterize each direction first
-mlrSpat <- vect(mlr_2019)
-raster_template = rast(mlrSpat, resolution = 0.5)
-
-flight22_raster = rasterize(vect(flight22_buffer), raster_template, sum = TRUE, progress = 'text')
-
-plot(flight22_raster)
-
-
-```
 

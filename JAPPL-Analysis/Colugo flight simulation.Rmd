@@ -11,24 +11,24 @@ editor_options:
 
 ```{r Load libraries and setup WD, include = F}
 
+#install packagaes
 list.of.packages <- c("tidyverse", "raster", "exactextractr", "rgdal", "units", "sf", "ggplot2", "tictoc", "tmap") 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if (length(new.packages)) install.packages(unlist(new.packages))
 lapply(list.of.packages, require, character.only = T)
 
-#setwd("~/Nanyang Technological University/Data_archived - 2021 Colugo GIS/Rachel's working folder") #Rachel's macbook
-setwd("C:/Users/Rachel Lee/Nanyang Technological University/Data_archived - 2021 Colugo GIS/Rachel's working folder") #Bolt desktop
+#set working directory
+setwd("/Users/rachellee/Documents/Manuscripts/Colugo MS")
 
 ```
 
 #### Custom functions
 
-Functions were written to reduce the repetitiveness of the code. Most of the functions were derived from the initial code created to conduct the basic connectivity analysis. Specific functions were also written for the genetic algorithmn itself. Parameters could be adjusted within these functions to adpat the code to your use case and study species.
+Functions were written to reduce the repetitiveness of the code. Most of the functions were derived from the initial code created to conduct the basic connectivity analysis. Specific functions were also written for the genetic algorithmn itself. Parameters could be adjusted within these functions to adapt the code to your use case and study species.
 
 ```{r load in functions, include = F}
 
-#source("/Users/rachellee/Nanyang Technological University/Data_archived - 2021 Colugo GIS/Rachel's working folder/R/functions.R")
-source("/Users/Rachel Lee/Nanyang Technological University/Data_archived - 2021 Colugo GIS/Rachel's working folder/R/functions.R")
+source("/Users/rachellee/Documents/Manuscripts/Colugo MS/R/functions.R")
 
 ```
 
@@ -50,11 +50,11 @@ buffer_size <- 25
 
 #variable control panel
 path_MLR2019 <-  "./Working layers/MLP road plans 2021/MLR planting plantiff 2021_shaved_v2.shp"
-path_trees2019 <- "./Working layers/TreesPoles_Remain2019_P5P6MLR.shp"
+path_trees2019 <- "./Working layers/TreesPoles_Remain2019_P5P6MLR_20210604.shp" #TreesPoles_2019_updated.shp
 path_flight2022 <- "./Results/Flight paths/FlightPaths_2022_Valid.shp"
 load("pole_attributes_12m.RData")
 
-path_dem2019 <- "./Working layers/DEM_2019.tif"
+path_dem2019 <- "./Working layers/DEM_2019_crop.tif"
 path_MLRbuffer <- "./Working layers/P5P6_FutureMLR_50mBuffer.shp"
 
 genus_exclude <- 'Elaeis|Oncosperma|Strychnos|Ziziphus|Clerodendrum|Dillenia|Calliandra'
@@ -70,10 +70,9 @@ trees19 <- st_read(path_trees2019) %>%
   filter(! Height_M < 1) %>%
   dplyr::select(-c('Lat', 'Long', 'Girth_M', "Height_GR"))
 flight22 <- st_read(path_flight2022)
-
-dem19 <- raster(path_dem2019)
-mlr_buffer <- st_read(path_MLRbuffer)
-dem19_Crop <- crop(x = dem19, y = mlr_buffer)
+dem19_Crop <- raster(path_dem2019)
+# mlr_buffer <- st_read(path_MLRbuffer)
+# dem19_Crop <- crop(x = dem19, y = mlr_buffer)
 
 #create empty list to store valid flight, table and pole
 valid_Flight <- vector("list", n)
@@ -102,6 +101,8 @@ Within the 2019 MLR road section, generate 1000 scenarios of 10 poles (points) e
 4. Count number of valid flights in total
 
 ```{r Initial scenario, include = F}
+
+set.seed(123)
 
 for (s in 1:n) {
 
@@ -211,15 +212,15 @@ print(valid_List[[best]])
 best_poles <- valid_Poles[[best]]
 best_flight <- valid_Flight[[best]]
 
-tm_shape(x) +
-  tm_lines(col = "royalblue") +
-tm_shape(flight22) +
-  tm_lines(col = "gray", alpha = 0.5) +
-tm_shape(scenario_pole) +
-  tm_dots(col = 'darkblue', size = 0.1) +
-  tm_text("ID", size = 1/2) +
-tm_shape(mlr_2019) +
-  tm_fill(col = "darkgreen", alpha = 0.5)
+# tm_shape(x) +
+#   tm_lines(col = "royalblue") +
+# tm_shape(flight22) +
+#   tm_lines(col = "gray", alpha = 0.5) +
+# tm_shape(scenario_pole) +
+#   tm_dots(col = 'darkblue', size = 0.1) +
+#   tm_text("ID", size = 1/2) +
+# tm_shape(mlr_2019) +
+#   tm_fill(col = "darkgreen", alpha = 0.5)
 
 
 #plot to check
@@ -233,21 +234,21 @@ tm_shape(best_poles) +
 tm_shape(mlr_2019) +
   tm_fill(col = "darkgreen", alpha = 0.5)
 
-#check a scenario with bidirectionality
-
-checkScenario <- 60
-
-print(valid_List[[checkScenario]])
-
-tm_shape(valid_Flight[[checkScenario]]) +
-  tm_lines(col = "royalblue") +
-tm_shape(flight22) +
-  tm_lines(col = "gray", alpha = 0.1) +
-tm_shape(valid_Poles[[checkScenario]]) +
-  tm_dots(col = 'darkblue', size = 0.1) +
-  tm_text("ID", size = 1/2) +
-tm_shape(mlr_2019) +
-  tm_fill(col = "darkgreen", alpha = 0.5)
+# #check a scenario with bidirectionality
+# 
+# checkScenario <- 60
+# 
+# print(valid_List[[checkScenario]])
+# 
+# tm_shape(valid_Flight[[checkScenario]]) +
+#   tm_lines(col = "royalblue") +
+# tm_shape(flight22) +
+#   tm_lines(col = "gray", alpha = 0.1) +
+# tm_shape(valid_Poles[[checkScenario]]) +
+#   tm_dots(col = 'darkblue', size = 0.1) +
+#   tm_text("ID", size = 1/2) +
+# tm_shape(mlr_2019) +
+#   tm_fill(col = "darkgreen", alpha = 0.5)
 
 ```
 
@@ -268,9 +269,9 @@ top_scores <- scenario_score[1:100,]
 #                                  max(top_scores$AdjustedScore)),]))
 #best_poles <- valid_Poles[[best]]
 
-save(top_poles, file = "Initial top 100 poles_12m.R")
-save(top_flight, file = "Initial top 100 flight_12m.R")
-save(top_scores, file = "Initial top 100 poles scores_12m.R")
+save(top_poles, file = "./Results/Simulation/Pole Height 12m/Initial top 100 poles_12m.R")
+save(top_flight, file = "./Results/Simulation/Pole Height 12m/Initial top 100 flight_12m.R")
+save(top_scores, file = "./Results/Simulation/Pole Height 12m/Initial top 100 poles scores_12m.R")
 
 #record the best score for generation to plot accumulation curve
 ContAccum <- data.frame(matrix(ncol=2, nrow=1, 
@@ -303,10 +304,20 @@ Repeat evolution until ContConnect score starts to plauteau off i.e. best scenar
 #functions (code chunk 1)
 #raw files (code chunk 3)
 
-#Generation
-gen <- 12
+#if continuing from paused session
+# load("./Results/Simulation/Pole Height 12m/Gen 21 top 100 poles_12m.R")
+# load("./Results/Simulation/Pole Height 12m/Gen 21 top 100 poles scores_12m.R")
+# load("./Results/Simulation/Pole Height 12m/Cont Accumulation Curve_12m.R")
 
-#After first generation, replace top_poles with result from gen
+for(lg in 47:47){
+
+#Generation
+gen <- lg
+
+# Generation 1
+# top_scores_gen <- top_scores
+
+# #After first generation, replace top_poles with result from gen
 top_poles <- top_poles_gen
 
 #create an acceptable range of movement in pairs (x and y direction)
@@ -428,21 +439,23 @@ top_gen <- as.integer(rownames(scenario_score_gen[1:100,]))
 top_poles_gen <- valid_Poles_gen[top_gen]
 top_scores_gen <- scenario_score_gen[1:100,]
 
-save(top_poles_gen, file = paste("Gen", gen, "top 100 poles_12m.R", sep = " "))
-save(top_scores_gen, file = paste("Gen", gen, "top 100 poles scores_12m.R", sep = " "))
-save(ContAccum, file = "Cont Accumulation Curve_12m.R")
+save(top_poles_gen, file = paste("./Results/Simulation/Pole Height 12m/Gen", gen, "top 100 poles_12m.R", sep = " "))
+save(top_scores_gen, file = paste("./Results/Simulation/Pole Height 12m/Gen", gen, "top 100 poles scores_12m.R", sep = " "))
+save(ContAccum, file = "./Results/Simulation/Pole Height 12m/Cont Accumulation Curve_12m.R")
 
-#manually save out as best poles/scores/fligh after simulation completes
+}
+
+#manually save out as best poles/scores/flight after simulation completes
 
 ```
-
 
 ```{r Checking scenario results}
 
 #best based on highest total flight
 best_gen <- as.integer(rownames(top_scores_gen[1,]))
 best_poles_gen <- valid_Poles_gen[[best_gen]]
-best_flight <- valid_Flight[[best_gen]]
+best_flight <- valid_Flight[[best_gen]] #will not be return if score remains same as previous gen
+best_scores <- valid_List_gen[[best_gen]] #will not be return if score remains same as previous gen
 
 #print(valid_List_gen[[best_gen1]])
 tm_shape(mlr_2019) +
@@ -456,21 +469,98 @@ tm_shape(best_poles_gen) +
   tm_dots(col = 'red', size = 0.5) +
   tm_text("ID", size = 1/2)
 
+#to regenerate flight and score data after best poles selected
+#extract new elevation data
+best_poles <- best_poles_gen %>% st_cast("POINT")
+
+best_poles <- best_poles %>%
+  mutate(Elev = raster::extract(x = dem19_Crop, y = best_poles)) %>%
+  st_cast("MULTIPOINT")
+    
+#extract MLR_Loc of new poles
+best_test <- st_join(best_poles, mlr_2019) %>%
+  mutate(MLR_Loc.x = MLR_Loc.y) %>%
+  rename(MLR_Loc = MLR_Loc.x) %>%
+  dplyr::select(-MLR_Loc.y) %>%
+  #combine with tree layer
+  rbind(trees19) %>%
+  mutate(Geom = geometry)
+  
+#generate flight path
+scenario_flight <- pathMake(best_test)
+    
+#extract elevation data from raster (run time: 6.64 sec)
+#create small buffer as exact_extract only works with polygons
+scenario_flight_buffer <- st_buffer(scenario_flight, 0.5) %>%
+  st_transform(crs(dem19_Crop)) 
+flightSamp <- scenario_flight %>%
+  mutate(maxElev = exact_extract(x = dem19_Crop, y = scenario_flight_buffer, fun = 'max'))
+    
+#Set LandHeight [function]
+flightSamp <- landHeight(flightSamp)
+    
+#remove invalid flight based on H (run time: 0.071 sec) [function]
+best_flight <- flightCheck(flightSamp)
+
+#plot to view
 tm_shape(mlr_2019) +
   tm_borders() +
-#tm_shape(flight22) +
-#  tm_lines(col = "MLR_L_F", pal = c("skyblue", "lightgreen")) +
-tm_shape(valid_Flight$`Scenario 174`) +
+tm_shape(flight22) +
+  tm_lines(col = "MLR_L_F", pal = c("skyblue", "lightgreen")) +
+tm_shape(best_flight) +
   tm_lines(col = "pink") +
 #  tm_lines(col = "MLR_Loc.Frm", pal = c("red", "blue", "darkgreen")) +
-tm_shape(valid_Poles_gen$`Scenario 174`) +
+tm_shape(best_poles) +
   tm_dots(col = 'red', size = 0.5) +
   tm_text("ID", size = 1/2)
+    
+#calculate score metrics [function]
+best_scores <- scoreMetrics(best_flight)
 
-# #save out final prelim file
-# For first test run, not final results
-# st_write(best_poles_gen, "./Results/Simulation/Preliminary best poles results.shp", crs=3414)
-# st_write(best_flight, "./Results/Simulation/Preliminary poles' flight results.shp", crs=3414)
+#save out final best results
+save(best_poles, file = "../Results/Simulation/Pole Height 12m/Best poles.R")
+save(best_flight, file = "../Results/Simulation/Pole Height 12m/Best flight.R")
+save(best_scores, file = "../Results/Simulation/Pole Height 12m/Best scores.R")
 
 ```
 
+## Table 2 Pole simulation results
+
+```{r best score tables, include = F}
+
+reach <- best_flight %>%
+  filter(Type.To %in% "Pole") %>%
+  count(ID.To) %>%
+  st_drop_geometry()
+
+exit <- best_flight %>%
+  filter(Type.Frm %in% "Pole") %>%
+  count(ID.Frm) %>%
+  st_drop_geometry()
+
+sum(reach$n + exit$n)
+nrow(best_flight)
+
+#double count (can only count once for a pole, count once fro ID.To, remove one count for ID.Frm)
+p2p <-  best_flight %>%
+  filter(Type.Frm %in% "Pole") %>%
+  filter(Type.To %in% "Pole")
+
+p2p$ID.Frm
+
+total <- reach %>%
+  left_join(exit, by = c("ID.To" = "ID.Frm")) %>%
+  mutate(n = n.x + n.y) %>%
+  dplyr::select(c(ID.To, n)) %>%
+  rename(ID = ID.To) %>%
+  mutate(Connections = ifelse(ID %in% p2p$ID.Frm, n-1, n)) #correct for double count
+
+table2 <- best_scores %>%
+  left_join(total, by = "ID") %>%
+  dplyr::select(c(ID, Connections, Direction, Exit, Entry, ScoreAdj, ScoreRaw)) %>%
+  mutate(Exit = round(Exit, digits = 1)) %>%
+  mutate(Entry = round(Entry, digits = 1)) %>%
+  mutate(ScoreAdj = round(ScoreAdj, digits = 1)) %>%
+  arrange(-Connections)
+
+```
