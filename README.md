@@ -1,9 +1,10 @@
 # glider-connectivity-model
-[![DOI](https://zenodo.org/badge/565328138.svg)](https://zenodo.org/badge/latestdoi/565328138)
 ## About
 
 This set of `rmd` files demonstrates the connectivity analysis for Sunda colugo in:
->  *Journal reference*
+Lee, R. S. K., Mendes, C. P., Liang, S. S. Q., Yang, V. W. X., Eng, D. K. L., Ong, W. B., Chua, Y. K., Byrnes, G., & Lim, N. T-L. (2023). Data from: Bridging the gap: optimising connectivity solutions for an arboreal gliding mammal. Journal of applied ecology. 
+
+https://doi.org/10.1111/1365-2664.14372
 
 ## Model
 
@@ -18,7 +19,7 @@ Information required for the model:
 
 ## Data
 
-The `data` set included in this repository is a mock data generated to demonstrate the workings of the code.
+The `data` set are archived within the Dryad Digital Repository: https://doi.org/10.5061/dryad.kwh70rz80
 
 ## Level of Support
 
